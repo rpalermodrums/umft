@@ -154,6 +154,7 @@ function diffTracks(
     summary: { ...EMPTY_SUMMARY },
     issues: [],
     added: 0,
+    elementIds: cloneElementIds(EMPTY_ELEMENT_IDS),
     trackMappings: [],
   };
 

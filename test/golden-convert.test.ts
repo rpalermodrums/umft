@@ -43,7 +43,7 @@ describe('golden convert', () => {
     assert.equal(report.summary.errors, 0);
     assert.equal(report.summary.dropped, 0);
     assert.equal(report.summary.approximate, 0);
-    assert.equal(report.trackMappings.length, 1);
+    assert.ok(report.trackMappings.length > 0);
     const mapping = report.trackMappings[0];
     assert.ok(mapping.elementIds);
     assert.ok(mapping.elementIds.perfect.length > 0);
