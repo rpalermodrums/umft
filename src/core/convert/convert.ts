@@ -20,6 +20,33 @@ export async function runConvert(job: ConvertJob): Promise<ConvertResult> {
 
   const inputAdapter = getAdapter(detected);
   const outputAdapter = getAdapter(job.targetFormat);
+  const inputCaps = inputAdapter.capabilities();
+  const outputCaps = outputAdapter.capabilities();
+
+  if (!inputCaps.supportsImport || !outputCaps.supportsExport) {
+    const issues: Issue[] = [
+      {
+        code: IssueCodes.CORE_UNSUPPORTED_CONVERSION_PAIR,
+        severity: 'ERROR',
+        category: 'STRUCTURE',
+        message: `Unsupported conversion pair: ${detected} -> ${job.targetFormat}.`,
+      },
+    ];
+    const report = buildReport({
+      job,
+      detected,
+      ir0: undefined,
+      ir1: undefined,
+      issues,
+      addedElements: 0,
+      diffSummary: undefined,
+      warnings: [],
+    });
+    if (!job.flags.noReport) {
+      await writeReport(job, undefined, undefined, issues, [], report);
+    }
+    return { exitCode: 2, report };
+  }
 
   let ir0: IRProject;
   let importIssues: Issue[] = [];

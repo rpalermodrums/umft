@@ -4,6 +4,11 @@ This catalog is **normative** for the codes currently implemented in the codebas
 
 ## CORE\_\*
 
+- `CORE_UNSUPPORTED_CONVERSION_PAIR`
+  - Severity: ERROR | Category: STRUCTURE
+  - Trigger: No adapter path or contract for {from}->{to}.
+  - Message: Unsupported conversion pair: {from} -> {to}.
+
 - `CORE_NO_SPECIFIC_CONTRACT`
   - Severity: WARN | Category: STRUCTURE
   - Trigger: No specific contract found; generic fallback used.
