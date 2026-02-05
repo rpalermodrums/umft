@@ -14,6 +14,11 @@ This catalog is **normative** for the codes currently implemented in the codebas
   - Trigger: Strict policy with any DROPPED/ERROR elements.
   - Message: Strict policy violation: {dropped} dropped, {errors} errors.
 
+- `CORE_OUTPUT_PATH_EXISTS`
+  - Severity: ERROR | Category: STRUCTURE
+  - Trigger: Output path exists and overwrite disabled.
+  - Message: Output already exists: {path}. Use --overwrite to replace.
+
 ## DIFF\_\*
 
 - `DIFF_ROUNDTRIP_IMPORT_FAILED`
@@ -85,3 +90,15 @@ This catalog is **normative** for the codes currently implemented in the codebas
   - Severity: WARN | Category: STRUCTURE
   - Trigger: Diff engine sees unknown event kind.
   - Message: Unknown IR element kind skipped during diff: {kind}.
+
+## MIDI\_\*
+
+- `MIDI_SMPTE_TIME_DIVISION_APPROXIMATED`
+  - Severity: WARN | Category: TIMING
+  - Trigger: SMPTE time division encountered; approximated to PPQ.
+  - Message: SMPTE timing approximated to PPQ={ppq}.
+
+- `MIDI_NOTE_OFF_MISSING`
+  - Severity: WARN | Category: TIMING
+  - Trigger: Note-on without matching note-off.
+  - Message: Missing note-off; note closed at end of track: pitch={pitch}, ch={channel}.
