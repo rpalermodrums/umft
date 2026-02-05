@@ -425,6 +425,7 @@ function buildTrackMappings(mappings: TrackMappingDiff[]): TrackMappingReport[] 
         approximate: mapping.summary.approximate,
         dropped,
       },
+      elementIds: mapping.elementIds,
     };
   });
 }

@@ -74,6 +74,13 @@ export interface TrackMappingReport {
     approximate: number;
     dropped: number;
   };
+  elementIds: {
+    perfect: string[];
+    equivalent: string[];
+    approximate: string[];
+    dropped: string[];
+    errors: string[];
+  };
 }
 
 export interface DiffSummary {

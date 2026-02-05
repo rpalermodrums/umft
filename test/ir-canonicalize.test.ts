@@ -41,7 +41,7 @@ describe('canonicalizeProject', () => {
           ],
         },
       ],
-      markers: [],
+      markers: [{ id: '', tick: 240, name: 'Marker' }],
     };
 
     const canonical = canonicalizeProject(project);
@@ -57,5 +57,8 @@ describe('canonicalizeProject', () => {
     assert.equal((events[2] as { pitch: number }).pitch, 60);
 
     assert.equal(canonical.timing.tempoMap[0].bpm, 120.123457);
+    assert.ok(canonical.timing.tempoMap[0].stableId);
+    assert.ok(canonical.timing.timeSignatures[0].stableId);
+    assert.ok(canonical.markers[0].stableId);
   });
 });

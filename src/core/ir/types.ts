@@ -23,12 +23,14 @@ export interface IRTiming {
 
 export interface IRTempoEvent {
   id: string;
+  stableId?: string;
   tick: number;
   bpm: number;
 }
 
 export interface IRTimeSignature {
   id: string;
+  stableId?: string;
   tick: number;
   numerator: number;
   denominator: 1 | 2 | 4 | 8 | 16 | 32;
@@ -137,6 +139,7 @@ export interface IRDynamicEvent {
 
 export interface IRMarker {
   id: string;
+  stableId?: string;
   tick: number;
   name: string;
   color?: string;

@@ -74,6 +74,7 @@ function canonicalizeTempoMap(events: IRTempoEvent[]): IRTempoEvent[] {
     return {
       ...event,
       id: event.id || makeId('tempo', [tick, bpm]),
+      stableId: event.stableId || makeId('tempo', [tick, bpm]),
       tick,
       bpm,
     };
@@ -88,6 +89,7 @@ function canonicalizeTimeSignatures(events: IRTimeSignature[]): IRTimeSignature[
     return {
       ...event,
       id: event.id || makeId('timesig', [tick, event.numerator, event.denominator]),
+      stableId: event.stableId || makeId('timesig', [tick, event.numerator, event.denominator]),
       tick,
     };
   });
@@ -124,6 +126,7 @@ function canonicalizeMarkers(markers: IRMarker[]): IRMarker[] {
     return {
       ...marker,
       id: marker.id || makeId('marker', [tick, marker.name]),
+      stableId: marker.stableId || makeId('marker', [tick, marker.name]),
       tick,
     };
   });

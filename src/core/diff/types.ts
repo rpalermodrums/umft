@@ -12,10 +12,19 @@ export interface DiffSummary {
   errors: number;
 }
 
+export interface ElementIdBuckets {
+  perfect: string[];
+  equivalent: string[];
+  approximate: string[];
+  dropped: string[];
+  errors: string[];
+}
+
 export interface TrackMappingDiff {
   source: IRTrack;
   target: IRTrack;
   summary: DiffSummary;
+  elementIds: ElementIdBuckets;
 }
 
 export interface DiffResult {

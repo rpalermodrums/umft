@@ -20,7 +20,13 @@ import {
   getExpectation,
 } from '../contracts';
 import { Issue, IssueCodes } from '../issues';
-import { DiffResult, DiffSummary, FidelityClass, TrackMappingDiff } from './types';
+import {
+  DiffResult,
+  DiffSummary,
+  ElementIdBuckets,
+  FidelityClass,
+  TrackMappingDiff,
+} from './types';
 
 interface CompareResult {
   className: FidelityClass;
@@ -31,6 +37,7 @@ interface CollectionDiffResult {
   summary: DiffSummary;
   issues: Issue[];
   added: number;
+  elementIds: ElementIdBuckets;
 }
 
 interface TrackDiffResult extends CollectionDiffResult {
@@ -46,6 +53,14 @@ const EMPTY_SUMMARY: DiffSummary = {
   errors: 0,
 };
 
+const EMPTY_ELEMENT_IDS: ElementIdBuckets = {
+  perfect: [],
+  equivalent: [],
+  approximate: [],
+  dropped: [],
+  errors: [],
+};
+
 export function diffProjects(
   ir0: IRProject,
   ir1: IRProject,
@@ -55,11 +70,11 @@ export function diffProjects(
   let addedElements = 0;
   let summary = { ...EMPTY_SUMMARY };
 
-  const tempo = diffById(
+  const tempo = diffByIdThenContent(
     'tempo',
     ir0.timing.tempoMap,
     ir1.timing.tempoMap,
-    (event) => event.id,
+    tempoContentKey,
     (a, b) => compareTempo(a, b, contract),
     contract,
   );
@@ -67,11 +82,11 @@ export function diffProjects(
   issues.push(...tempo.issues);
   addedElements += tempo.added;
 
-  const timesig = diffById(
+  const timesig = diffByIdThenContent(
     'timesig',
     ir0.timing.timeSignatures,
     ir1.timing.timeSignatures,
-    (event) => event.id,
+    timeSignatureContentKey,
     (a, b) => compareTimeSignature(a, b, contract),
     contract,
   );
@@ -79,11 +94,11 @@ export function diffProjects(
   issues.push(...timesig.issues);
   addedElements += timesig.added;
 
-  const markers = diffById(
+  const markers = diffByIdThenContent(
     'marker',
     ir0.markers,
     ir1.markers,
-    (marker) => marker.id,
+    markerContentKey,
     (a, b) => compareMarker(a, b, contract),
     contract,
   );
@@ -187,7 +202,12 @@ function diffTracks(
 
     used.add(match.id);
     const trackDiff = diffEvents(track.events, match.events, contract);
-    result.trackMappings.push({ source: track, target: match, summary: trackDiff.summary });
+    result.trackMappings.push({
+      source: track,
+      target: match,
+      summary: trackDiff.summary,
+      elementIds: trackDiff.elementIds,
+    });
     result.summary = mergeSummary(result.summary, trackDiff.summary);
     result.issues.push(...trackDiff.issues);
     result.added += trackDiff.added;
@@ -207,6 +227,7 @@ function diffEvents(
   let summary = { ...EMPTY_SUMMARY };
   let added = 0;
   const issues: Issue[] = [];
+  let elementIds = cloneElementIds(EMPTY_ELEMENT_IDS);
 
   for (const kind of Object.keys(grouped0) as IREvent['kind'][]) {
     const result = diffByIdThenContent(
@@ -216,14 +237,16 @@ function diffEvents(
       eventContentKey,
       (a, b) => compareEvent(kind, a, b, contract),
       contract,
+      resolveEventId,
     );
 
     summary = mergeSummary(summary, result.summary);
     issues.push(...result.issues);
     added += result.added;
+    elementIds = mergeElementIds(elementIds, result.elementIds);
   }
 
-  return { summary, issues, added };
+  return { summary, issues, added, elementIds };
 }
 
 function eventContentKey(event: IREvent): string {
@@ -244,6 +267,22 @@ function eventContentKey(event: IREvent): string {
       return `dynamic:${event.tick}:${event.value}`;
   }
   return '';
+}
+
+function resolveEventId(event: IREvent): string {
+  return event.stableId ?? event.id ?? eventContentKey(event);
+}
+
+function tempoContentKey(event: IRTempoEvent): string {
+  return `tempo:${event.tick}:${event.bpm}`;
+}
+
+function timeSignatureContentKey(event: IRTimeSignature): string {
+  return `timesig:${event.tick}:${event.numerator}:${event.denominator}`;
+}
+
+function markerContentKey(marker: IRMarker): string {
+  return `marker:${marker.tick}:${marker.name}`;
 }
 
 function groupByKind(events: IREvent[]): Record<IREvent['kind'], IREvent[]> {
@@ -281,6 +320,7 @@ function diffById<T>(
   let summary = { ...EMPTY_SUMMARY };
   const issues: Issue[] = [];
   let added = 0;
+  const elementIds = cloneElementIds(EMPTY_ELEMENT_IDS);
 
   for (const id of allIds) {
     const a = leftMap.get(id);
@@ -304,7 +344,7 @@ function diffById<T>(
     issues.push(...comparison.issues);
   }
 
-  return { summary, issues, added };
+  return { summary, issues, added, elementIds };
 }
 
 function diffByIdThenContent<T extends { id?: string; stableId?: string }>(
@@ -314,6 +354,7 @@ function diffByIdThenContent<T extends { id?: string; stableId?: string }>(
   keyFn: (item: T) => string,
   compare: (a: T, b: T) => CompareResult,
   contract: MappingContract,
+  elementIdFor?: (item: T) => string,
 ): CollectionDiffResult {
   const expectation = getExpectation(contract, kind);
   const leftByStable = new Map<string, T>();
@@ -344,6 +385,7 @@ function diffByIdThenContent<T extends { id?: string; stableId?: string }>(
   let summary = { ...EMPTY_SUMMARY };
   const issues: Issue[] = [];
   let added = 0;
+  let elementIds = cloneElementIds(EMPTY_ELEMENT_IDS);
 
   for (const stableId of matchedStableIds) {
     const a = leftByStable.get(stableId);
@@ -353,6 +395,9 @@ function diffByIdThenContent<T extends { id?: string; stableId?: string }>(
     const comparison = compare(a, b);
     summary = applyClass(summary, comparison.className);
     issues.push(...comparison.issues);
+    if (elementIdFor) {
+      addElementId(elementIds, comparison.className, elementIdFor(a));
+    }
   }
 
   const leftAfterStable = left.filter((item) => !matchedLeftStable.has(item));
@@ -381,6 +426,9 @@ function diffByIdThenContent<T extends { id?: string; stableId?: string }>(
     const comparison = compare(a, b);
     summary = applyClass(summary, comparison.className);
     issues.push(...comparison.issues);
+    if (elementIdFor) {
+      addElementId(elementIds, comparison.className, elementIdFor(a));
+    }
   }
 
   const leftRemaining = leftAfterStable.filter((item) => !matchedLeftById.has(item));
@@ -392,13 +440,15 @@ function diffByIdThenContent<T extends { id?: string; stableId?: string }>(
     keyFn,
     compare,
     expectation,
+    elementIdFor,
   );
 
   summary = mergeSummary(summary, contentResult.summary);
   issues.push(...contentResult.issues);
   added += contentResult.added;
+  elementIds = mergeElementIds(elementIds, contentResult.elementIds);
 
-  return { summary, issues, added };
+  return { summary, issues, added, elementIds };
 }
 
 function diffByContent<T>(
@@ -408,6 +458,7 @@ function diffByContent<T>(
   keyFn: (item: T) => string,
   compare: (a: T, b: T) => CompareResult,
   expectation: FidelityExpectation,
+  elementIdFor?: (item: T) => string,
 ): CollectionDiffResult {
   const leftMap = buildKeyedMap(left, keyFn);
   const rightMap = buildKeyedMap(right, keyFn);
@@ -416,6 +467,7 @@ function diffByContent<T>(
   let summary = { ...EMPTY_SUMMARY };
   const issues: Issue[] = [];
   let added = 0;
+  const elementIds = cloneElementIds(EMPTY_ELEMENT_IDS);
 
   for (const id of allIds) {
     const a = leftMap.get(id);
@@ -431,15 +483,21 @@ function diffByContent<T>(
       const dropResult = classifyDrop(expectation, kind);
       summary = applyClass(summary, dropResult.className);
       issues.push(...dropResult.issues);
+      if (elementIdFor && a) {
+        addElementId(elementIds, dropResult.className, elementIdFor(a));
+      }
       continue;
     }
 
     const comparison = compare(a as T, b);
     summary = applyClass(summary, comparison.className);
     issues.push(...comparison.issues);
+    if (elementIdFor && a) {
+      addElementId(elementIds, comparison.className, elementIdFor(a));
+    }
   }
 
-  return { summary, issues, added };
+  return { summary, issues, added, elementIds };
 }
 
 function buildKeyedMap<T>(items: T[], keyFn: (item: T) => string): Map<string, T> {
@@ -452,6 +510,64 @@ function buildKeyedMap<T>(items: T[], keyFn: (item: T) => string): Map<string, T
     map.set(`${base}#${index}`, item);
   }
   return map;
+}
+
+function cloneElementIds(source: ElementIdBuckets): ElementIdBuckets {
+  return {
+    perfect: [...source.perfect],
+    equivalent: [...source.equivalent],
+    approximate: [...source.approximate],
+    dropped: [...source.dropped],
+    errors: [...source.errors],
+  };
+}
+
+function mergeElementIds(target: ElementIdBuckets, incoming: ElementIdBuckets): ElementIdBuckets {
+  const merged = cloneElementIds(target);
+  mergeIdList(merged.perfect, incoming.perfect);
+  mergeIdList(merged.equivalent, incoming.equivalent);
+  mergeIdList(merged.approximate, incoming.approximate);
+  mergeIdList(merged.dropped, incoming.dropped);
+  mergeIdList(merged.errors, incoming.errors);
+  return merged;
+}
+
+function mergeIdList(target: string[], incoming: string[], cap = 50): void {
+  for (const id of incoming) {
+    if (target.length >= cap) {
+      break;
+    }
+    target.push(id);
+  }
+}
+
+function addElementId(
+  buckets: ElementIdBuckets,
+  className: FidelityClass,
+  id?: string,
+  cap = 50,
+): void {
+  if (!id) return;
+  let bucket: string[] | undefined;
+  switch (className) {
+    case 'PERFECT':
+      bucket = buckets.perfect;
+      break;
+    case 'EQUIVALENT':
+      bucket = buckets.equivalent;
+      break;
+    case 'APPROXIMATE':
+      bucket = buckets.approximate;
+      break;
+    case 'DROPPED':
+      bucket = buckets.dropped;
+      break;
+    case 'ERROR':
+      bucket = buckets.errors;
+      break;
+  }
+  if (!bucket || bucket.length >= cap) return;
+  bucket.push(id);
 }
 
 function classifyDrop(expectation: FidelityExpectation, kind: ContractElementKind): CompareResult {

@@ -115,7 +115,40 @@
     },
     "trackMappings": {
       "type": "array",
-      "items": { "type": "object" }
+      "items": {
+        "type": "object",
+        "properties": {
+          "sourceTrackId": { "type": "string" },
+          "sourceName": { "type": "string" },
+          "targetPartId": { "type": "string" },
+          "targetName": { "type": "string" },
+          "stats": {
+            "type": "object",
+            "properties": {
+              "notes": { "type": "number" },
+              "controllers": { "type": "number" }
+            }
+          },
+          "fidelity": {
+            "type": "object",
+            "properties": {
+              "perfect": { "type": "number" },
+              "approximate": { "type": "number" },
+              "dropped": { "type": "number" }
+            }
+          },
+          "elementIds": {
+            "type": "object",
+            "properties": {
+              "perfect": { "type": "array", "items": { "type": "string" } },
+              "equivalent": { "type": "array", "items": { "type": "string" } },
+              "approximate": { "type": "array", "items": { "type": "string" } },
+              "dropped": { "type": "array", "items": { "type": "string" } },
+              "errors": { "type": "array", "items": { "type": "string" } }
+            }
+          }
+        }
+      }
     },
     "issues": {
       "type": "array",

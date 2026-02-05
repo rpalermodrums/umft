@@ -138,4 +138,32 @@ describe('diffProjects', () => {
     assert.equal(result.summary.errors, 0);
     assert.equal(result.summary.dropped, 0);
   });
+
+  it('matches timing and markers by stable id', () => {
+    const ir0 = canonicalizeProject({
+      ...baseProject(),
+      timing: {
+        ppq: 960,
+        tempoMap: [{ id: 't1', tick: 0, bpm: 120 }],
+        timeSignatures: [{ id: 'ts1', tick: 0, numerator: 4, denominator: 4 }],
+      },
+      markers: [{ id: 'm1', tick: 480, name: 'A' }],
+    });
+
+    const ir1 = canonicalizeProject({
+      ...baseProject(),
+      timing: {
+        ppq: 960,
+        tempoMap: [{ id: 't2', tick: 0, bpm: 120 }],
+        timeSignatures: [{ id: 'ts2', tick: 0, numerator: 4, denominator: 4 }],
+      },
+      markers: [{ id: 'm2', tick: 480, name: 'A' }],
+    });
+
+    const contract = getContract('midi', 'midi').contract;
+    const result = diffProjects(ir0, ir1, contract);
+
+    assert.equal(result.summary.errors, 0);
+    assert.equal(result.summary.dropped, 0);
+  });
 });
