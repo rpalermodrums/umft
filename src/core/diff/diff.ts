@@ -12,6 +12,7 @@ import {
   IRTimeSignature,
   IRTrack,
 } from '../ir';
+import { normalizeName } from '../ir/ids';
 import {
   ContractElementKind,
   FidelityExpectation,
@@ -141,9 +142,22 @@ function diffTracks(
   }
 
   const byId = new Map(tracks1.map((track) => [track.id, track]));
+  const byName = new Map<string, IRTrack[]>();
+  for (const track of tracks1) {
+    const key = normalizeName(track.name);
+    const list = byName.get(key) ?? [];
+    list.push(track);
+    byName.set(key, list);
+  }
+  const used = new Set<string>();
 
   for (const track of tracks0) {
-    const match = byId.get(track.id);
+    let match = byId.get(track.id);
+    if (!match) {
+      const key = normalizeName(track.name);
+      const list = byName.get(key);
+      match = list?.find((candidate) => !used.has(candidate.id));
+    }
     if (!match) {
       const dropped = diffEvents(track.events, [], contract);
       result.summary = mergeSummary(result.summary, dropped.summary);
@@ -152,6 +166,7 @@ function diffTracks(
       continue;
     }
 
+    used.add(match.id);
     const trackDiff = diffEvents(track.events, match.events, contract);
     result.summary = mergeSummary(result.summary, trackDiff.summary);
     result.issues.push(...trackDiff.issues);
@@ -174,11 +189,11 @@ function diffEvents(
   const issues: Issue[] = [];
 
   for (const kind of Object.keys(grouped0) as IREvent['kind'][]) {
-    const result = diffById(
+    const result = diffByIdThenContent(
       kind,
       grouped0[kind] ?? [],
       grouped1[kind] ?? [],
-      (event) => event.id,
+      eventContentKey,
       (a, b) => compareEvent(kind, a, b, contract),
       contract,
     );
@@ -189,6 +204,26 @@ function diffEvents(
   }
 
   return { summary, issues, added };
+}
+
+function eventContentKey(event: IREvent): string {
+  switch (event.kind) {
+    case 'note':
+      return `note:${event.tick}:${event.duration}:${event.pitch}:${event.velocity}`;
+    case 'cc':
+      return `cc:${event.tick}:${event.controller}:${event.value}`;
+    case 'pitchbend':
+      return `pitchbend:${event.tick}:${event.value}`;
+    case 'text':
+      return `text:${event.tick}:${event.textType}:${event.text}`;
+    case 'lyric':
+      return `lyric:${event.tick}:${event.text}`;
+    case 'articulation':
+      return `articulation:${event.tick}:${event.value}`;
+    case 'dynamic':
+      return `dynamic:${event.tick}:${event.value}`;
+  }
+  return '';
 }
 
 function groupByKind(events: IREvent[]): Record<IREvent['kind'], IREvent[]> {
@@ -250,6 +285,111 @@ function diffById<T>(
   }
 
   return { summary, issues, added };
+}
+
+function diffByIdThenContent<T extends { id?: string }>(
+  kind: ContractElementKind,
+  left: T[],
+  right: T[],
+  keyFn: (item: T) => string,
+  compare: (a: T, b: T) => CompareResult,
+  contract: MappingContract,
+): CollectionDiffResult {
+  const expectation = getExpectation(contract, kind);
+  const leftById = new Map(left.map((item) => [item.id ?? '', item]));
+  const rightById = new Map(right.map((item) => [item.id ?? '', item]));
+  const matchedIds = new Set<string>();
+
+  for (const id of leftById.keys()) {
+    if (!id) continue;
+    if (rightById.has(id)) {
+      matchedIds.add(id);
+    }
+  }
+
+  let summary = { ...EMPTY_SUMMARY };
+  const issues: Issue[] = [];
+  let added = 0;
+
+  for (const id of matchedIds) {
+    const a = leftById.get(id);
+    const b = rightById.get(id);
+    if (!a || !b) continue;
+    summary.elementsTotal += 1;
+    const comparison = compare(a, b);
+    summary = applyClass(summary, comparison.className);
+    issues.push(...comparison.issues);
+  }
+
+  const leftRemaining = left.filter((item) => !matchedIds.has(item.id ?? ''));
+  const rightRemaining = right.filter((item) => !matchedIds.has(item.id ?? ''));
+  const contentResult = diffByContent(
+    kind,
+    leftRemaining,
+    rightRemaining,
+    keyFn,
+    compare,
+    expectation,
+  );
+
+  summary = mergeSummary(summary, contentResult.summary);
+  issues.push(...contentResult.issues);
+  added += contentResult.added;
+
+  return { summary, issues, added };
+}
+
+function diffByContent<T>(
+  kind: ContractElementKind,
+  left: T[],
+  right: T[],
+  keyFn: (item: T) => string,
+  compare: (a: T, b: T) => CompareResult,
+  expectation: FidelityExpectation,
+): CollectionDiffResult {
+  const leftMap = buildKeyedMap(left, keyFn);
+  const rightMap = buildKeyedMap(right, keyFn);
+  const allIds = new Set([...leftMap.keys(), ...rightMap.keys()]);
+
+  let summary = { ...EMPTY_SUMMARY };
+  const issues: Issue[] = [];
+  let added = 0;
+
+  for (const id of allIds) {
+    const a = leftMap.get(id);
+    const b = rightMap.get(id);
+    if (!a && b) {
+      added += 1;
+      continue;
+    }
+
+    summary.elementsTotal += 1;
+
+    if (!b) {
+      const dropResult = classifyDrop(expectation, kind);
+      summary = applyClass(summary, dropResult.className);
+      issues.push(...dropResult.issues);
+      continue;
+    }
+
+    const comparison = compare(a as T, b);
+    summary = applyClass(summary, comparison.className);
+    issues.push(...comparison.issues);
+  }
+
+  return { summary, issues, added };
+}
+
+function buildKeyedMap<T>(items: T[], keyFn: (item: T) => string): Map<string, T> {
+  const counts = new Map<string, number>();
+  const map = new Map<string, T>();
+  for (const item of items) {
+    const base = keyFn(item);
+    const index = counts.get(base) ?? 0;
+    counts.set(base, index + 1);
+    map.set(`${base}#${index}`, item);
+  }
+  return map;
 }
 
 function classifyDrop(expectation: FidelityExpectation, kind: ContractElementKind): CompareResult {
