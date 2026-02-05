@@ -45,6 +45,7 @@ export type IRTrackType = 'midi' | 'notation' | 'audio_ref' | 'meta';
 
 export interface IRTrack {
   id: string;
+  stableId?: string;
   name: string;
   type: IRTrackType;
   midi?: {
@@ -71,6 +72,7 @@ export type IREvent =
 export interface IRNoteEvent {
   kind: 'note';
   id: string;
+  stableId?: string;
   tick: number;
   duration: number;
   pitch: number;
@@ -84,6 +86,7 @@ export interface IRNoteEvent {
 export interface IRCCEvent {
   kind: 'cc';
   id: string;
+  stableId?: string;
   tick: number;
   controller: number;
   value: number;
@@ -92,6 +95,7 @@ export interface IRCCEvent {
 export interface IRPitchBendEvent {
   kind: 'pitchbend';
   id: string;
+  stableId?: string;
   tick: number;
   value: number;
 }
@@ -99,6 +103,7 @@ export interface IRPitchBendEvent {
 export interface IRTextEvent {
   kind: 'text';
   id: string;
+  stableId?: string;
   tick: number;
   textType: 'trackName' | 'marker' | 'generic';
   text: string;
@@ -107,6 +112,7 @@ export interface IRTextEvent {
 export interface IRLyricEvent {
   kind: 'lyric';
   id: string;
+  stableId?: string;
   tick: number;
   text: string;
   syllabic?: 'single' | 'begin' | 'middle' | 'end';
@@ -116,6 +122,7 @@ export interface IRLyricEvent {
 export interface IRArticulationEvent {
   kind: 'articulation';
   id: string;
+  stableId?: string;
   tick: number;
   value: string;
 }
@@ -123,6 +130,7 @@ export interface IRArticulationEvent {
 export interface IRDynamicEvent {
   kind: 'dynamic';
   id: string;
+  stableId?: string;
   tick: number;
   value: string;
 }

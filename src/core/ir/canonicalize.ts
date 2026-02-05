@@ -135,6 +135,7 @@ function canonicalizeMarkers(markers: IRMarker[]): IRMarker[] {
 
 function canonicalizeTracks(tracks: IRTrack[]): IRTrack[] {
   const indexed = tracks.map((track, index) => ({ track, index }));
+  const stableIds = buildStableTrackIds(indexed);
 
   indexed.sort((a, b) => {
     const typeOrder = compareNumbers(
@@ -153,21 +154,39 @@ function canonicalizeTracks(tracks: IRTrack[]): IRTrack[] {
     return compareNumbers(a.index, b.index);
   });
 
-  return indexed.map(({ track, index }) => canonicalizeTrack(track, index));
+  return indexed.map(({ track, index }) => canonicalizeTrack(track, index, stableIds.get(index)));
 }
 
-function canonicalizeTrack(track: IRTrack, originalIndex: number): IRTrack {
+function buildStableTrackIds(
+  entries: Array<{ track: IRTrack; index: number }>,
+): Map<number, string> {
+  const counts = new Map<string, number>();
+  const stableIds = new Map<number, string>();
+  for (const entry of entries) {
+    const key = normalizeName(entry.track.name);
+    const next = (counts.get(key) ?? 0) + 1;
+    counts.set(key, next);
+    const stableId = entry.track.stableId || makeId('trackStable', [key, next]);
+    stableIds.set(entry.index, stableId);
+  }
+  return stableIds;
+}
+
+function canonicalizeTrack(track: IRTrack, originalIndex: number, stableId?: string): IRTrack {
   const id = track.id || makeId('track', [track.type, normalizeName(track.name), originalIndex]);
+  const resolvedStableId =
+    stableId ?? track.stableId ?? makeId('trackStable', [normalizeName(track.name), originalIndex]);
   return {
     ...track,
     id,
-    events: canonicalizeEvents(track.events, id),
+    stableId: resolvedStableId,
+    events: canonicalizeEvents(track.events, id, resolvedStableId),
   };
 }
 
-function canonicalizeEvents(events: IREvent[], trackId: string): IREvent[] {
+function canonicalizeEvents(events: IREvent[], trackId: string, trackStableId: string): IREvent[] {
   const normalized = events.map((event, index) => ({
-    event: normalizeEvent(event, trackId),
+    event: normalizeEvent(event, trackId, trackStableId),
     index,
   }));
 
@@ -196,15 +215,19 @@ function canonicalizeEvents(events: IREvent[], trackId: string): IREvent[] {
   return normalized.map((entry) => entry.event);
 }
 
-function normalizeEvent(event: IREvent, trackId: string): IREvent {
+function normalizeEvent(event: IREvent, trackId: string, trackStableId: string): IREvent {
   switch (event.kind) {
     case 'note': {
       const tick = roundToInt(event.tick);
       const duration = Math.max(1, roundToInt(event.duration));
       const id = event.id || makeId('note', [trackId, tick, duration, event.pitch, event.velocity]);
+      const stableId =
+        event.stableId ||
+        makeId('note', [trackStableId, tick, duration, event.pitch, event.velocity]);
       return {
         ...event,
         id,
+        stableId,
         tick,
         duration,
       } satisfies IRNoteEvent;
@@ -212,27 +235,35 @@ function normalizeEvent(event: IREvent, trackId: string): IREvent {
     case 'cc': {
       const tick = roundToInt(event.tick);
       const id = event.id || makeId('cc', [trackId, tick, event.controller, event.value]);
+      const stableId =
+        event.stableId || makeId('cc', [trackStableId, tick, event.controller, event.value]);
       return {
         ...event,
         id,
+        stableId,
         tick,
       } satisfies IRCCEvent;
     }
     case 'pitchbend': {
       const tick = roundToInt(event.tick);
       const id = event.id || makeId('pitchbend', [trackId, tick, event.value]);
+      const stableId = event.stableId || makeId('pitchbend', [trackStableId, tick, event.value]);
       return {
         ...event,
         id,
+        stableId,
         tick,
       } satisfies IRPitchBendEvent;
     }
     case 'text': {
       const tick = roundToInt(event.tick);
       const id = event.id || makeId('text', [trackId, tick, event.textType, event.text]);
+      const stableId =
+        event.stableId || makeId('text', [trackStableId, tick, event.textType, event.text]);
       return {
         ...event,
         id,
+        stableId,
         tick,
       } satisfies IRTextEvent;
     }
@@ -241,27 +272,35 @@ function normalizeEvent(event: IREvent, trackId: string): IREvent {
       const id =
         event.id ||
         makeId('lyric', [trackId, tick, event.text, event.syllabic ?? '', event.line ?? '']);
+      const stableId =
+        event.stableId ||
+        makeId('lyric', [trackStableId, tick, event.text, event.syllabic ?? '', event.line ?? '']);
       return {
         ...event,
         id,
+        stableId,
         tick,
       } satisfies IRLyricEvent;
     }
     case 'articulation': {
       const tick = roundToInt(event.tick);
       const id = event.id || makeId('articulation', [trackId, tick, event.value]);
+      const stableId = event.stableId || makeId('articulation', [trackStableId, tick, event.value]);
       return {
         ...event,
         id,
+        stableId,
         tick,
       } satisfies IRArticulationEvent;
     }
     case 'dynamic': {
       const tick = roundToInt(event.tick);
       const id = event.id || makeId('dynamic', [trackId, tick, event.value]);
+      const stableId = event.stableId || makeId('dynamic', [trackStableId, tick, event.value]);
       return {
         ...event,
         id,
+        stableId,
         tick,
       } satisfies IRDynamicEvent;
     }

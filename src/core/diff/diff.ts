@@ -20,7 +20,7 @@ import {
   getExpectation,
 } from '../contracts';
 import { Issue, IssueCodes } from '../issues';
-import { DiffResult, DiffSummary, FidelityClass } from './types';
+import { DiffResult, DiffSummary, FidelityClass, TrackMappingDiff } from './types';
 
 interface CompareResult {
   className: FidelityClass;
@@ -31,6 +31,10 @@ interface CollectionDiffResult {
   summary: DiffSummary;
   issues: Issue[];
   added: number;
+}
+
+interface TrackDiffResult extends CollectionDiffResult {
+  trackMappings: TrackMappingDiff[];
 }
 
 const EMPTY_SUMMARY: DiffSummary = {
@@ -122,6 +126,7 @@ export function diffProjects(
     summary,
     issues,
     addedElements,
+    trackMappings: trackResult.trackMappings,
   };
 }
 
@@ -129,8 +134,13 @@ function diffTracks(
   tracks0: IRTrack[],
   tracks1: IRTrack[],
   contract: MappingContract,
-): CollectionDiffResult {
-  const result: CollectionDiffResult = { summary: { ...EMPTY_SUMMARY }, issues: [], added: 0 };
+): TrackDiffResult {
+  const result: TrackDiffResult = {
+    summary: { ...EMPTY_SUMMARY },
+    issues: [],
+    added: 0,
+    trackMappings: [],
+  };
 
   if (tracks0.length !== tracks1.length) {
     result.issues.push({
@@ -141,6 +151,12 @@ function diffTracks(
     });
   }
 
+  const byStableId = new Map<string, IRTrack>();
+  for (const track of tracks1) {
+    if (track.stableId) {
+      byStableId.set(track.stableId, track);
+    }
+  }
   const byId = new Map(tracks1.map((track) => [track.id, track]));
   const byName = new Map<string, IRTrack[]>();
   for (const track of tracks1) {
@@ -152,7 +168,10 @@ function diffTracks(
   const used = new Set<string>();
 
   for (const track of tracks0) {
-    let match = byId.get(track.id);
+    let match = track.stableId ? byStableId.get(track.stableId) : undefined;
+    if (!match) {
+      match = byId.get(track.id);
+    }
     if (!match) {
       const key = normalizeName(track.name);
       const list = byName.get(key);
@@ -168,6 +187,7 @@ function diffTracks(
 
     used.add(match.id);
     const trackDiff = diffEvents(track.events, match.events, contract);
+    result.trackMappings.push({ source: track, target: match, summary: trackDiff.summary });
     result.summary = mergeSummary(result.summary, trackDiff.summary);
     result.issues.push(...trackDiff.issues);
     result.added += trackDiff.added;
@@ -287,7 +307,7 @@ function diffById<T>(
   return { summary, issues, added };
 }
 
-function diffByIdThenContent<T extends { id?: string }>(
+function diffByIdThenContent<T extends { id?: string; stableId?: string }>(
   kind: ContractElementKind,
   left: T[],
   right: T[],
@@ -296,8 +316,50 @@ function diffByIdThenContent<T extends { id?: string }>(
   contract: MappingContract,
 ): CollectionDiffResult {
   const expectation = getExpectation(contract, kind);
-  const leftById = new Map(left.map((item) => [item.id ?? '', item]));
-  const rightById = new Map(right.map((item) => [item.id ?? '', item]));
+  const leftByStable = new Map<string, T>();
+  const rightByStable = new Map<string, T>();
+  for (const item of left) {
+    if (item.stableId) {
+      leftByStable.set(item.stableId, item);
+    }
+  }
+  for (const item of right) {
+    if (item.stableId) {
+      rightByStable.set(item.stableId, item);
+    }
+  }
+
+  const matchedStableIds = new Set<string>();
+  const matchedLeftStable = new Set<T>();
+  const matchedRightStable = new Set<T>();
+  for (const stableId of leftByStable.keys()) {
+    const rightItem = rightByStable.get(stableId);
+    if (rightItem) {
+      matchedStableIds.add(stableId);
+      matchedLeftStable.add(leftByStable.get(stableId) as T);
+      matchedRightStable.add(rightItem);
+    }
+  }
+
+  let summary = { ...EMPTY_SUMMARY };
+  const issues: Issue[] = [];
+  let added = 0;
+
+  for (const stableId of matchedStableIds) {
+    const a = leftByStable.get(stableId);
+    const b = rightByStable.get(stableId);
+    if (!a || !b) continue;
+    summary.elementsTotal += 1;
+    const comparison = compare(a, b);
+    summary = applyClass(summary, comparison.className);
+    issues.push(...comparison.issues);
+  }
+
+  const leftAfterStable = left.filter((item) => !matchedLeftStable.has(item));
+  const rightAfterStable = right.filter((item) => !matchedRightStable.has(item));
+
+  const leftById = new Map(leftAfterStable.map((item) => [item.id ?? '', item]));
+  const rightById = new Map(rightAfterStable.map((item) => [item.id ?? '', item]));
   const matchedIds = new Set<string>();
 
   for (const id of leftById.keys()) {
@@ -307,22 +369,22 @@ function diffByIdThenContent<T extends { id?: string }>(
     }
   }
 
-  let summary = { ...EMPTY_SUMMARY };
-  const issues: Issue[] = [];
-  let added = 0;
-
+  const matchedLeftById = new Set<T>();
+  const matchedRightById = new Set<T>();
   for (const id of matchedIds) {
     const a = leftById.get(id);
     const b = rightById.get(id);
     if (!a || !b) continue;
+    matchedLeftById.add(a);
+    matchedRightById.add(b);
     summary.elementsTotal += 1;
     const comparison = compare(a, b);
     summary = applyClass(summary, comparison.className);
     issues.push(...comparison.issues);
   }
 
-  const leftRemaining = left.filter((item) => !matchedIds.has(item.id ?? ''));
-  const rightRemaining = right.filter((item) => !matchedIds.has(item.id ?? ''));
+  const leftRemaining = leftAfterStable.filter((item) => !matchedLeftById.has(item));
+  const rightRemaining = rightAfterStable.filter((item) => !matchedRightById.has(item));
   const contentResult = diffByContent(
     kind,
     leftRemaining,

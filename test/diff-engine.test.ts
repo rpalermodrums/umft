@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { diffProjects } from '../src/core/diff';
 import { getContract } from '../src/core/contracts';
-import { IRProject } from '../src/core/ir';
+import { IRProject, canonicalizeProject } from '../src/core/ir';
 
 function baseProject(): IRProject {
   return {
@@ -87,5 +87,55 @@ describe('diffProjects', () => {
 
     assert.equal(result.summary.approximate, 1);
     assert.equal(result.summary.errors, 0);
+  });
+
+  it('matches tracks by stable id across type changes', () => {
+    const ir0 = canonicalizeProject({
+      ...baseProject(),
+      tracks: [
+        {
+          id: '',
+          name: 'Piano',
+          type: 'midi',
+          events: [
+            {
+              kind: 'note',
+              id: '',
+              tick: 0,
+              duration: 480,
+              pitch: 60,
+              velocity: 100,
+            },
+          ],
+        },
+      ],
+    });
+
+    const ir1 = canonicalizeProject({
+      ...baseProject(),
+      tracks: [
+        {
+          id: '',
+          name: 'Piano',
+          type: 'notation',
+          events: [
+            {
+              kind: 'note',
+              id: '',
+              tick: 0,
+              duration: 480,
+              pitch: 60,
+              velocity: 100,
+            },
+          ],
+        },
+      ],
+    });
+
+    const contract = getContract('midi', 'midi').contract;
+    const result = diffProjects(ir0, ir1, contract);
+
+    assert.equal(result.summary.errors, 0);
+    assert.equal(result.summary.dropped, 0);
   });
 });
