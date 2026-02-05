@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
 import { canonicalizeProject, makeId, type IRProject } from '../src/core/ir';
 
 describe('ir ids', () => {
@@ -6,8 +7,8 @@ describe('ir ids', () => {
     const first = makeId('note', ['trk', 0, 480, 60, 100]);
     const second = makeId('note', ['trk', 0, 480, 60, 100]);
 
-    expect(first).toEqual(second);
-    expect(first).toHaveLength(32);
+    assert.equal(first, second);
+    assert.equal(first.length, 32);
   });
 });
 
@@ -45,16 +46,16 @@ describe('canonicalizeProject', () => {
 
     const canonical = canonicalizeProject(project);
 
-    expect(canonical.tracks[0].type).toBe('midi');
-    expect(canonical.tracks[0].id).not.toEqual('');
-    expect(canonical.tracks[1].type).toBe('notation');
+    assert.equal(canonical.tracks[0].type, 'midi');
+    assert.notEqual(canonical.tracks[0].id, '');
+    assert.equal(canonical.tracks[1].type, 'notation');
 
     const events = canonical.tracks[0].events;
-    expect(events[0].kind).toBe('cc');
-    expect(events[1].kind).toBe('note');
-    expect((events[1] as { pitch: number }).pitch).toBe(55);
-    expect((events[2] as { pitch: number }).pitch).toBe(60);
+    assert.equal(events[0].kind, 'cc');
+    assert.equal(events[1].kind, 'note');
+    assert.equal((events[1] as { pitch: number }).pitch, 55);
+    assert.equal((events[2] as { pitch: number }).pitch, 60);
 
-    expect(canonical.timing.tempoMap[0].bpm).toBe(120.123457);
+    assert.equal(canonical.timing.tempoMap[0].bpm, 120.123457);
   });
 });

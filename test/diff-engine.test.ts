@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
 import { diffProjects } from '../src/core/diff';
 import { getContract } from '../src/core/contracts';
 import { IRProject } from '../src/core/ir';
@@ -42,7 +43,7 @@ describe('diffProjects', () => {
     const contract = getContract('midi', 'midi').contract;
     const result = diffProjects(ir0, ir1, contract);
 
-    expect(result.summary.errors).toBe(1);
+    assert.equal(result.summary.errors, 1);
   });
 
   it('classifies approximate mismatches under non-lossless expectation', () => {
@@ -84,7 +85,7 @@ describe('diffProjects', () => {
     const contract = getContract('midi', 'musicxml').contract;
     const result = diffProjects(ir0, ir1, contract);
 
-    expect(result.summary.approximate).toBe(1);
-    expect(result.summary.errors).toBe(0);
+    assert.equal(result.summary.approximate, 1);
+    assert.equal(result.summary.errors, 0);
   });
 });

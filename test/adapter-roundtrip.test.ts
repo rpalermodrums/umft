@@ -1,7 +1,8 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
 import { IRProject } from '../src/core/ir';
 import { midiAdapter } from '../src/formats/midi';
 import { musicxmlAdapter } from '../src/formats/musicxml';
@@ -45,8 +46,8 @@ describe('adapter roundtrips', () => {
       (sum, track) => sum + track.events.filter((e) => e.kind === 'note').length,
       0,
     );
-    expect(noteCount).toBe(1);
-    expect(result.ir.timing.tempoMap.length).toBe(1);
+    assert.equal(noteCount, 1);
+    assert.equal(result.ir.timing.tempoMap.length, 1);
 
     await rm(dir, { recursive: true, force: true });
   });
@@ -61,8 +62,8 @@ describe('adapter roundtrips', () => {
     const notes = result.ir.tracks.flatMap((track) =>
       track.events.filter((e) => e.kind === 'note'),
     );
-    expect(notes.length).toBe(1);
-    expect((notes[0] as { pitch: number }).pitch).toBe(60);
+    assert.equal(notes.length, 1);
+    assert.equal((notes[0] as { pitch: number }).pitch, 60);
 
     await rm(dir, { recursive: true, force: true });
   });
