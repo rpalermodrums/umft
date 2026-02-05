@@ -23,7 +23,8 @@
     "prepare": "lefthook install"
   },
   "dependencies": {
-    "commander": "^12.1.0"
+    "commander": "^12.1.0",
+    "fast-xml-parser": "^4.4.1"
   },
   "devDependencies": {
     "@types/node": "^20.11.30",
