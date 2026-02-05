@@ -30,12 +30,14 @@
   "devDependencies": {
     "@types/node": "^20.11.30",
     "@types/yauzl": "^2.10.0",
+    "@types/yazl": "^2.4.3",
     "@typescript-eslint/eslint-plugin": "^7.3.1",
     "@typescript-eslint/parser": "^7.3.1",
     "eslint": "^8.57.0",
     "eslint-config-prettier": "^9.1.0",
     "lefthook": "^1.6.16",
     "prettier": "^3.2.5",
-    "typescript": "5.5.4"
+    "typescript": "5.5.4",
+    "yazl": "^2.5.1"
   }
 }
