@@ -1,3 +1,4 @@
+import { UMFTConfig } from '../core/config/types';
 import { Issue } from '../core/issues';
 import { IRProject, Format } from '../core/ir';
 
@@ -19,6 +20,8 @@ export interface ImportOptions {
 
 export interface ExportOptions {
   overwrite?: boolean;
+  config?: UMFTConfig;
+  profile?: string;
 }
 
 export interface ImportResult {

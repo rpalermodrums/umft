@@ -2,9 +2,11 @@ import { promises as fs } from 'node:fs';
 import { basename, extname, posix } from 'node:path';
 import { XMLBuilder, XMLParser } from 'fast-xml-parser';
 import yauzl from 'yauzl';
+import { DEFAULT_CONFIG } from '../../core/config/defaults';
+import { UMFTConfig } from '../../core/config/types';
+import { Issue, IssueCodes } from '../../core/issues';
 import { atomicWriteFile, ensureDirForFile } from '../../core/io';
 import { canonicalizeProject, IRMarker, IRProject, IRTimeSignature } from '../../core/ir';
-import { IssueCodes } from '../../core/issues';
 import {
   FormatAdapter,
   ImportOptions,
@@ -72,11 +74,11 @@ export const musicxmlAdapter: FormatAdapter = {
     return { ir, warnings: parsed.warnings, issues: parsed.issues };
   },
   async export(ir: IRProject, path: string, opts: ExportOptions): Promise<ExportResult> {
-    void opts;
-    const xml = buildMusicXml(ir);
+    const config = opts.config ?? DEFAULT_CONFIG;
+    const result = buildMusicXml(ir, config);
     await ensureDirForFile(path);
-    await atomicWriteFile(path, xml);
-    return { warnings: [], issues: [] };
+    await atomicWriteFile(path, result.xml);
+    return { warnings: result.warnings, issues: result.issues };
   },
   capabilities() {
     return { supportsImport: true, supportsExport: true, supportsInspect: true };
@@ -440,25 +442,111 @@ function isUnsafeZipEntry(name: string): boolean {
   return cleaned.startsWith('..') || posix.isAbsolute(cleaned);
 }
 
-function buildMusicXml(ir: IRProject): string {
+function buildMusicXml(
+  ir: IRProject,
+  config: UMFTConfig,
+): { xml: string; issues: Issue[]; warnings: string[] } {
+  const issues: Issue[] = [];
+  const warnings: string[] = [];
+  const counters: BuildCounters = {
+    quantized: 0,
+    quantizeConflicts: 0,
+    splitAcrossMeasures: 0,
+    unrepresentableTied: 0,
+    durationRounded: 0,
+  };
+
   const defaultTimeSig: IRTimeSignature = { id: '', tick: 0, numerator: 4, denominator: 4 };
   const timeSignatures = ir.timing.timeSignatures.length
     ? ir.timing.timeSignatures
     : [defaultTimeSig];
+  if (!ir.timing.timeSignatures.length) {
+    issues.push({
+      code: IssueCodes.CORE_TIME_SIGNATURE_DEFAULTED,
+      severity: 'WARN',
+      category: 'TEMPO',
+      message: 'No time signatures detected; defaulted to 4/4 from start.',
+    });
+  }
 
   const measures = buildMeasureMap(timeSignatures, ir.timing.ppq, maxTick(ir));
+  const musicxmlConfig = config.musicxml ?? DEFAULT_CONFIG.musicxml;
+  const divisions = chooseDivisions(ir.timing.ppq, musicxmlConfig, issues);
+  const reps = representableDurations(divisions, musicxmlConfig.inferTuplets ?? false);
 
   const partList = ir.tracks.map((track, index) => ({
     id: track.notation?.partId ?? `P${index + 1}`,
     'part-name': { text: track.name },
   }));
 
+  const tempoByMeasure = buildTempoByMeasure(
+    measures,
+    ir.timing.tempoMap,
+    ir.timing.ppq,
+    musicxmlConfig.tempoRound ?? 0.01,
+  );
+
   const parts = ir.tracks.map((track, index) => {
     const partId = track.notation?.partId ?? `P${index + 1}`;
     const notes = track.events.filter((event) => event.kind === 'note');
-    const measuresXml = buildPartMeasures(notes, measures, ir.timing.ppq);
+    const measuresXml = buildPartMeasures(
+      notes,
+      measures,
+      ir.timing.ppq,
+      divisions,
+      musicxmlConfig,
+      reps,
+      counters,
+      index === 0 ? tempoByMeasure : undefined,
+    );
     return { id: partId, measure: measuresXml };
   });
+
+  if (counters.quantized > 0) {
+    issues.push({
+      code: IssueCodes.MXML_QUANTIZATION_APPLIED,
+      severity: 'WARN',
+      category: 'TIMING',
+      message: `Quantization applied to ${counters.quantized} notes (grid ${musicxmlConfig.quantize}).`,
+      count: counters.quantized,
+    });
+  }
+  if (counters.quantizeConflicts > 0) {
+    issues.push({
+      code: IssueCodes.MXML_QUANTIZATION_CONFLICT_RESOLVED,
+      severity: 'WARN',
+      category: 'TIMING',
+      message: `Quantization conflicts resolved (overlaps/zero durations): ${counters.quantizeConflicts} notes.`,
+      count: counters.quantizeConflicts,
+    });
+  }
+  if (counters.splitAcrossMeasures > 0) {
+    issues.push({
+      code: IssueCodes.MXML_NOTE_SPLIT_ACROSS_MEASURES,
+      severity: 'INFO',
+      category: 'NOTATION',
+      message: `Notes split across measures with ties: ${counters.splitAcrossMeasures} notes.`,
+      count: counters.splitAcrossMeasures,
+    });
+  }
+  if (counters.unrepresentableTied > 0) {
+    issues.push({
+      code: IssueCodes.MXML_UNREPRESENTABLE_DURATION_TIED,
+      severity: 'WARN',
+      category: 'NOTATION',
+      message: `Unrepresentable durations expressed with ties: ${counters.unrepresentableTied} notes.`,
+      count: counters.unrepresentableTied,
+    });
+  }
+  if (counters.durationRounded > 0) {
+    issues.push({
+      code: IssueCodes.MXML_DURATION_ROUNDED,
+      severity: 'WARN',
+      category: 'TIMING',
+      message: `Duration rounded during import/export: ${counters.durationRounded} notes affected.`,
+      count: counters.durationRounded,
+    });
+  }
 
   const score = {
     'score-partwise': {
@@ -470,7 +558,7 @@ function buildMusicXml(ir: IRProject): string {
     },
   };
 
-  return builder.build(score);
+  return { xml: builder.build(score), issues, warnings };
 }
 
 function buildMeasureMap(timeSigs: IRTimeSignature[], ppq: number, endTick: number) {
@@ -504,61 +592,126 @@ function buildPartMeasures(
   notes: Array<{ tick: number; duration: number; pitch: number }>,
   measures: Array<{ index: number; start: number; end: number; timeSig: IRTimeSignature }>,
   ppq: number,
+  divisions: number,
+  config: UMFTConfig['musicxml'],
+  reps: DurationComponent[],
+  counters: BuildCounters,
+  tempoByMeasure?: Map<number, number[]>,
 ) {
-  const divisions = ppq;
-  const segments = splitNotesAcrossMeasures(notes, measures);
+  const quantizeStep = getQuantizeStep(config, ppq);
+  const quantizeEnabled = config.quantize !== 'off' && quantizeStep > 0;
+  const quantizedNotes = notes.map((note) => {
+    let start = note.tick;
+    let end = note.tick + note.duration;
+    if (quantizeEnabled) {
+      const startQ = quantizeTick(start, quantizeStep);
+      const endQ = quantizeTick(end, quantizeStep);
+      if (startQ !== start || endQ !== end) {
+        counters.quantized += 1;
+      }
+      start = startQ;
+      end = endQ;
+      if (end <= start) {
+        end = start + Math.max(1, quantizeStep);
+        counters.quantizeConflicts += 1;
+      }
+    }
+    return { start, end, pitch: note.pitch };
+  });
+
+  const segments = splitNotesAcrossMeasures(quantizedNotes, measures, config, counters);
 
   return measures.map((measure, idx) => {
     const noteList = segments.get(measure.index) ?? [];
     noteList.sort((a, b) => a.onset - b.onset || a.pitch - b.pitch);
 
     const xmlNotes: Array<Record<string, unknown>> = [];
-    let cursor = 0;
-    const measureLen = measure.end - measure.start;
+    const measureLenUnits = ticksToDurationUnits(measure.end - measure.start, ppq, divisions);
+    let cursorUnits = 0;
+
     for (const note of noteList) {
-      if (note.onset > cursor) {
-        const restDur = note.onset - cursor;
-        xmlNotes.push(makeRest(restDur, divisions, ppq));
-        cursor = note.onset;
+      const onsetUnits = ticksToDurationUnits(note.onset, ppq, divisions);
+      if (onsetUnits > cursorUnits) {
+        const restUnits = onsetUnits - cursorUnits;
+        const restComponents = spellDurationWithTies(restUnits, reps);
+        for (const component of restComponents) {
+          xmlNotes.push(makeRest(component));
+          cursorUnits += component.units;
+        }
       }
-      xmlNotes.push(makeNote(note.pitch, note.duration, divisions, ppq, note.tie));
-      cursor += note.duration;
+
+      const durationUnits = ticksToDurationUnits(note.duration, ppq, divisions, counters, true);
+      const components = spellDurationWithTies(durationUnits, reps);
+      if (components.length > 1) {
+        counters.unrepresentableTied += 1;
+      }
+      for (let i = 0; i < components.length; i += 1) {
+        const component = components[i];
+        const tie = mergeTie(note.tie, i, components.length);
+        xmlNotes.push(makeNote(note.pitch, component, tie));
+        cursorUnits += component.units;
+      }
     }
 
-    if (cursor < measureLen) {
-      xmlNotes.push(makeRest(measureLen - cursor, divisions, ppq));
+    if (cursorUnits < measureLenUnits) {
+      const tailUnits = measureLenUnits - cursorUnits;
+      const restComponents = spellDurationWithTies(tailUnits, reps);
+      for (const component of restComponents) {
+        xmlNotes.push(makeRest(component));
+      }
     }
 
-    const attrs: Array<Record<string, unknown>> = [];
+    const attributes: Record<string, unknown> = {};
     if (idx === 0 || measure.timeSig.tick === measure.start) {
-      attrs.push({ divisions });
-      attrs.push({
-        time: { beats: measure.timeSig.numerator, 'beat-type': measure.timeSig.denominator },
-      });
+      attributes.divisions = divisions;
+      attributes.time = {
+        beats: measure.timeSig.numerator,
+        'beat-type': measure.timeSig.denominator,
+      };
     }
 
-    const attributes = attrs.length ? { attributes: attrs } : {};
+    const directions = tempoByMeasure?.get(measure.index);
+    const direction = directions?.length
+      ? directions.map((tempo) => ({ sound: { tempo } }))
+      : undefined;
 
-    return { number: measure.index, ...attributes, note: xmlNotes };
+    return {
+      number: measure.index,
+      ...(Object.keys(attributes).length ? { attributes } : {}),
+      ...(direction ? { direction } : {}),
+      note: xmlNotes,
+    };
   });
 }
 
-function makeRest(durationTicks: number, divisions: number, ppq: number) {
-  const duration = Math.max(1, Math.round((durationTicks * divisions) / ppq));
-  const typeInfo = noteType(durationTicks, ppq);
+interface BuildCounters {
+  quantized: number;
+  quantizeConflicts: number;
+  splitAcrossMeasures: number;
+  unrepresentableTied: number;
+  durationRounded: number;
+}
+
+interface DurationComponent {
+  type: string;
+  dots: number;
+  units: number;
+  timeModification?: { 'actual-notes': number; 'normal-notes': number };
+}
+
+function makeRest(component: DurationComponent) {
   return {
     rest: {},
-    duration,
-    type: typeInfo.type,
-    ...(typeInfo.timeModification ? { 'time-modification': typeInfo.timeModification } : {}),
+    duration: component.units,
+    type: component.type,
+    ...(component.dots > 0 ? { dot: new Array(component.dots).fill({}) } : {}),
+    ...(component.timeModification ? { 'time-modification': component.timeModification } : {}),
   };
 }
 
 function makeNote(
   pitchValue: number,
-  durationTicks: number,
-  divisions: number,
-  ppq: number,
+  component: DurationComponent,
   tie?: 'start' | 'stop' | 'continue',
 ) {
   const { step, alter, octave } = fromMidiPitch(pitchValue);
@@ -566,47 +719,248 @@ function makeNote(
   if (alter !== 0) {
     pitch.alter = alter;
   }
-  const duration = Math.max(1, Math.round((durationTicks * divisions) / ppq));
-  const typeInfo = noteType(durationTicks, ppq);
   const tieElements = tie ? tieToElements(tie) : undefined;
   return {
     pitch,
-    duration,
-    type: typeInfo.type,
-    ...(typeInfo.timeModification ? { 'time-modification': typeInfo.timeModification } : {}),
+    duration: component.units,
+    type: component.type,
+    ...(component.dots > 0 ? { dot: new Array(component.dots).fill({}) } : {}),
+    ...(component.timeModification ? { 'time-modification': component.timeModification } : {}),
     ...(tieElements ? { tie: tieElements, notations: { tied: tieElements } } : {}),
   };
 }
 
-function noteType(
-  durationTicks: number,
-  ppq: number,
-): { type: string; timeModification?: { 'actual-notes': number; 'normal-notes': number } } {
-  const baseTypes: Array<{ type: string; ticks: number }> = [
-    { type: 'whole', ticks: ppq * 4 },
-    { type: 'half', ticks: ppq * 2 },
-    { type: 'quarter', ticks: ppq },
-    { type: 'eighth', ticks: ppq / 2 },
-    { type: '16th', ticks: ppq / 4 },
-    { type: '32nd', ticks: ppq / 8 },
+function representableDurations(divisions: number, inferTuplets: boolean): DurationComponent[] {
+  const typeOrder = [
+    'whole',
+    'half',
+    'quarter',
+    'eighth',
+    '16th',
+    '32nd',
+    '64th',
+    '128th',
+    '256th',
   ];
+  const components: DurationComponent[] = [];
+  let units = divisions * 4;
 
-  for (const base of baseTypes) {
-    if (durationTicks * 3 === base.ticks * 2) {
-      return {
-        type: base.type,
-        timeModification: { 'actual-notes': 3, 'normal-notes': 2 },
-      };
+  for (const type of typeOrder) {
+    if (Number.isInteger(units) && units >= 1) {
+      components.push({ type, dots: 0, units });
+      const dotted = units * 1.5;
+      if (Number.isInteger(dotted)) {
+        components.push({ type, dots: 1, units: dotted });
+      }
+      const doubleDotted = units * 1.75;
+      if (Number.isInteger(doubleDotted)) {
+        components.push({ type, dots: 2, units: doubleDotted });
+      }
+      if (inferTuplets) {
+        const triplet = (units * 2) / 3;
+        if (Number.isInteger(triplet)) {
+          components.push({
+            type,
+            dots: 0,
+            units: triplet,
+            timeModification: { 'actual-notes': 3, 'normal-notes': 2 },
+          });
+        }
+      }
+    }
+    units /= 2;
+  }
+
+  const unique = new Map<string, DurationComponent>();
+  for (const component of components) {
+    const key = `${component.type}|${component.dots}|${component.units}|${
+      component.timeModification ? 't' : 'n'
+    }`;
+    if (!unique.has(key)) {
+      unique.set(key, component);
     }
   }
 
-  const ratio = durationTicks / ppq;
-  if (ratio >= 4) return { type: 'whole' };
-  if (ratio >= 2) return { type: 'half' };
-  if (ratio >= 1) return { type: 'quarter' };
-  if (ratio >= 0.5) return { type: 'eighth' };
-  if (ratio >= 0.25) return { type: '16th' };
-  return { type: '32nd' };
+  return [...unique.values()].sort((a, b) => b.units - a.units || a.dots - b.dots);
+}
+
+function spellDurationWithTies(
+  durationUnits: number,
+  reps: DurationComponent[],
+): DurationComponent[] {
+  let remaining = durationUnits;
+  const components: DurationComponent[] = [];
+  let safety = 0;
+
+  while (remaining > 0 && safety < 64) {
+    const match = reps.find((rep) => rep.units <= remaining);
+    if (!match) {
+      break;
+    }
+    components.push(match);
+    remaining -= match.units;
+    safety += 1;
+  }
+
+  if (remaining > 0) {
+    const fallback = reps[reps.length - 1] ?? { type: 'quarter', dots: 0, units: remaining };
+    components.push({ ...fallback, units: remaining, dots: 0, timeModification: undefined });
+  }
+
+  return components;
+}
+
+function buildTempoByMeasure(
+  measures: Array<{ index: number; start: number; end: number }>,
+  tempoMap: IRProject['timing']['tempoMap'],
+  ppq: number,
+  tempoRound: number,
+): Map<number, number[]> {
+  const result = new Map<number, number[]>();
+  if (!tempoMap.length) return result;
+
+  const sortedTempo = [...tempoMap].sort((a, b) => a.tick - b.tick);
+  let measureIndex = 0;
+  for (const tempo of sortedTempo) {
+    while (measureIndex + 1 < measures.length && tempo.tick >= measures[measureIndex].end) {
+      measureIndex += 1;
+    }
+    const measure = measures[measureIndex];
+    if (!measure) continue;
+    const bpm = roundTo(tempo.bpm, tempoRound);
+    const list = result.get(measure.index) ?? [];
+    list.push(bpm);
+    result.set(measure.index, list);
+  }
+
+  return result;
+}
+
+function roundTo(value: number, precision: number): number {
+  if (!Number.isFinite(precision) || precision <= 0) return value;
+  const factor = 1 / precision;
+  return Math.round(value * factor) / factor;
+}
+
+function getQuantizeStep(config: UMFTConfig['musicxml'], ppq: number): number {
+  if (config.quantize === 'off') return 0;
+  const steps = resolveQuantizeFractions(config).map((fraction) => fractionToTicks(fraction, ppq));
+  if (!steps.length) {
+    return Math.round(ppq / 4);
+  }
+  return Math.max(1, Math.min(...steps));
+}
+
+function resolveQuantizeFractions(config: UMFTConfig['musicxml']): Fraction[] {
+  const fractions: Fraction[] = [];
+  if (config.quantize === 'custom') {
+    for (const entry of config.quantizeCustom ?? []) {
+      const parsed = parseFraction(entry);
+      if (parsed) {
+        fractions.push(parsed);
+      }
+    }
+  } else {
+    const parsed = parseFraction(config.quantize);
+    if (parsed) {
+      fractions.push(parsed);
+    }
+  }
+  return fractions;
+}
+
+function chooseDivisions(ppq: number, config: UMFTConfig['musicxml'], issues: Issue[]): number {
+  const maxDivisions = 480;
+  let divisions = 24;
+
+  if (config.quantize !== 'off') {
+    const fractions = resolveQuantizeFractions(config);
+    const denominators = fractions.map((fraction) => fraction.denominator);
+    const maxDen = denominators.length ? Math.max(...denominators) : 16;
+    if (maxDen % 4 === 0) {
+      divisions = maxDen / 4;
+    } else {
+      divisions = maxDen;
+    }
+  } else {
+    const candidates = [96, 48, 24];
+    const candidate = candidates.find((entry) => entry <= maxDivisions);
+    divisions = candidate ?? Math.min(24, maxDivisions);
+  }
+
+  if (config.inferTuplets && divisions % 3 !== 0) {
+    divisions *= 3;
+  }
+
+  if (divisions > maxDivisions) {
+    issues.push({
+      code: IssueCodes.MXML_DIVISIONS_CLAMPED,
+      severity: 'WARN',
+      category: 'NOTATION',
+      message: `Divisions clamped from ${divisions} to ${maxDivisions} to limit complexity.`,
+    });
+    divisions = maxDivisions;
+  }
+
+  return divisions;
+}
+
+interface Fraction {
+  numerator: number;
+  denominator: number;
+}
+
+function parseFraction(value: string): Fraction | null {
+  const match = value.trim().match(/^(\d+)\/(\d+)$/);
+  if (!match) return null;
+  const numerator = Number(match[1]);
+  const denominator = Number(match[2]);
+  if (!Number.isFinite(numerator) || !Number.isFinite(denominator) || denominator === 0) {
+    return null;
+  }
+  return { numerator, denominator };
+}
+
+function fractionToTicks(fraction: Fraction, ppq: number): number {
+  const quarters = (4 * fraction.numerator) / fraction.denominator;
+  const ticks = ppq * quarters;
+  return Math.max(1, Math.round(ticks));
+}
+
+function quantizeTick(tick: number, step: number): number {
+  if (step <= 0) return tick;
+  return Math.round(tick / step) * step;
+}
+
+function ticksToDurationUnits(
+  durationTicks: number,
+  ppq: number,
+  divisions: number,
+  counters?: BuildCounters,
+  trackRounding = false,
+): number {
+  if (durationTicks <= 0) return 0;
+  const raw = (durationTicks * divisions) / ppq;
+  const rounded = Math.round(raw);
+  if (trackRounding && counters && Math.abs(raw - rounded) > 1e-6) {
+    counters.durationRounded += 1;
+  }
+  return Math.max(1, rounded);
+}
+
+function mergeTie(
+  outerTie: 'start' | 'stop' | 'continue' | undefined,
+  index: number,
+  count: number,
+): 'start' | 'stop' | 'continue' | undefined {
+  if (count <= 1) return outerTie;
+  if (index === 0) {
+    return outerTie === 'stop' || outerTie === 'continue' ? 'continue' : 'start';
+  }
+  if (index === count - 1) {
+    return outerTie === 'start' || outerTie === 'continue' ? 'continue' : 'stop';
+  }
+  return 'continue';
 }
 
 function toMidiPitch(step: string, alter: number, octave: number): number {
@@ -631,8 +985,10 @@ function asRecord(value: unknown): Record<string, unknown> {
 }
 
 function splitNotesAcrossMeasures(
-  notes: Array<{ tick: number; duration: number; pitch: number }>,
+  notes: Array<{ start: number; end: number; pitch: number }>,
   measures: Array<{ index: number; start: number; end: number }>,
+  config: UMFTConfig['musicxml'],
+  counters: BuildCounters,
 ): Map<
   number,
   Array<{ onset: number; duration: number; pitch: number; tie?: 'start' | 'stop' | 'continue' }>
@@ -641,27 +997,42 @@ function splitNotesAcrossMeasures(
     number,
     Array<{ onset: number; duration: number; pitch: number; tie?: 'start' | 'stop' | 'continue' }>
   >();
-  const sorted = [...notes].sort((a, b) => a.tick - b.tick || a.pitch - b.pitch);
+  const sorted = [...notes].sort((a, b) => a.start - b.start || a.pitch - b.pitch);
   let measureIndex = 0;
 
   for (const note of sorted) {
-    while (measureIndex + 1 < measures.length && note.tick >= measures[measureIndex].end) {
+    while (measureIndex + 1 < measures.length && note.start >= measures[measureIndex].end) {
       measureIndex += 1;
     }
-    let start = note.tick;
-    const end = note.tick + note.duration;
-    let currentIndex = measureIndex;
+    const start = note.start;
+    const end = note.end;
 
-    while (start < end && currentIndex < measures.length) {
+    if (!config.splitAcrossMeasures) {
+      const measure = measures[measureIndex];
+      if (!measure) {
+        continue;
+      }
+      const list = result.get(measure.index) ?? [];
+      list.push({ onset: start - measure.start, duration: end - start, pitch: note.pitch });
+      result.set(measure.index, list);
+      continue;
+    }
+
+    let currentStart = start;
+    let currentIndex = measureIndex;
+    let split = false;
+
+    while (currentStart < end && currentIndex < measures.length) {
       const measure = measures[currentIndex];
       const segEnd = Math.min(end, measure.end);
-      const duration = segEnd - start;
-      const onset = start - measure.start;
+      const duration = segEnd - currentStart;
+      const onset = currentStart - measure.start;
 
-      const isFirst = start === note.tick;
+      const isFirst = currentStart === start;
       const isLast = segEnd === end;
       let tie: 'start' | 'stop' | 'continue' | undefined;
       if (!isFirst || !isLast) {
+        split = true;
         if (isFirst && !isLast) {
           tie = 'start';
         } else if (!isFirst && !isLast) {
@@ -675,8 +1046,12 @@ function splitNotesAcrossMeasures(
       list.push({ onset, duration, pitch: note.pitch, tie });
       result.set(measure.index, list);
 
-      start = segEnd;
+      currentStart = segEnd;
       currentIndex += 1;
+    }
+
+    if (split) {
+      counters.splitAcrossMeasures += 1;
     }
   }
 

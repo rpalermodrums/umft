@@ -38,6 +38,8 @@ export async function runConvert(job: ConvertJob): Promise<ConvertResult> {
 
   const exportResult = await outputAdapter.export(ir0, job.outPath, {
     overwrite: job.flags.overwrite,
+    config: job.config,
+    profile: job.profile,
   });
   if (exportResult.issues.some((issue) => issue.severity === 'ERROR')) {
     await writeReport(job, ir0, undefined, exportResult.issues, importWarnings);
@@ -51,7 +53,7 @@ export async function runConvert(job: ConvertJob): Promise<ConvertResult> {
 
   try {
     const reimported = await outputAdapter.import(job.outPath, {
-      defaultPPQ: job.config.midi.defaultPPQ,
+      defaultPPQ: ir0.timing.ppq,
     });
     ir1 = canonicalizeProject(reimported.ir);
     const contractResult = getContract(detected, job.targetFormat, job.profile);

@@ -19,6 +19,11 @@ This catalog is **normative** for the codes currently implemented in the codebas
   - Trigger: Output path exists and overwrite disabled.
   - Message: Output already exists: {path}. Use --overwrite to replace.
 
+- `CORE_TIME_SIGNATURE_DEFAULTED`
+  - Severity: WARN | Category: TEMPO
+  - Trigger: No time signatures detected; defaulted to 4/4 from start.
+  - Message: No time signatures detected; defaulted to 4/4 from start.
+
 - `CORE_ZIP_SLIP_BLOCKED`
   - Severity: ERROR | Category: STRUCTURE
   - Trigger: Zip entry attempts directory traversal.
@@ -119,3 +124,33 @@ This catalog is **normative** for the codes currently implemented in the codebas
   - Severity: ERROR | Category: STRUCTURE
   - Trigger: Failed to read compressed MusicXML (.mxl).
   - Message: Failed to read compressed MusicXML (.mxl): {reason}.
+
+- `MXML_QUANTIZATION_APPLIED`
+  - Severity: WARN | Category: TIMING
+  - Trigger: Quantization changed note onsets/offsets.
+  - Message: Quantization applied to {count} notes (grid {grid}).
+
+- `MXML_QUANTIZATION_CONFLICT_RESOLVED`
+  - Severity: WARN | Category: TIMING
+  - Trigger: Quantization created overlaps/zero durations; corrected.
+  - Message: Quantization conflicts resolved (overlaps/zero durations): {count} notes.
+
+- `MXML_NOTE_SPLIT_ACROSS_MEASURES`
+  - Severity: INFO | Category: NOTATION
+  - Trigger: Notes split into tied segments across measure boundaries.
+  - Message: Notes split across measures with ties: {count} notes.
+
+- `MXML_UNREPRESENTABLE_DURATION_TIED`
+  - Severity: WARN | Category: NOTATION
+  - Trigger: Duration cannot be expressed as a single note type; emitted ties.
+  - Message: Unrepresentable durations expressed with ties: {count} notes.
+
+- `MXML_DIVISIONS_CLAMPED`
+  - Severity: WARN | Category: NOTATION
+  - Trigger: Computed divisions exceeded max; clamped.
+  - Message: Divisions clamped from {computed} to {max} to limit complexity.
+
+- `MXML_DURATION_ROUNDED`
+  - Severity: WARN | Category: TIMING
+  - Trigger: Tick-to-duration rounding above threshold.
+  - Message: Duration rounded during import/export: {count} notes affected.
