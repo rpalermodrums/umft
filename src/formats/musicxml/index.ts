@@ -139,7 +139,7 @@ function parseMusicXml(content: string, path: string, ppq = 960): MusicXmlParseR
   for (const part of parts) {
     const partRecord = asRecord(part);
     const partId = (partRecord.id ?? partRecord['@_id'] ?? partRecord['@id']) as string | undefined;
-    const name = partNames.get(partId) ?? `Part ${partId ?? tracks.length + 1}`;
+    const name = partNames.get(partId ?? '') ?? `Part ${partId ?? tracks.length + 1}`;
     const events: ParsedPart['events'] = [];
 
     let divisions = 1;
@@ -189,7 +189,7 @@ function parseMusicXml(content: string, path: string, ppq = 960): MusicXmlParseR
           const step = pitch.step as string | undefined;
           const alter = Number(pitch.alter ?? 0);
           const octave = Number(pitch.octave ?? 4);
-          const midiPitch = toMidiPitch(step, alter, octave);
+          const midiPitch = toMidiPitch(step ?? 'C', alter, octave);
           events.push({
             kind: 'note',
             id: '',
