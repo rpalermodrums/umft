@@ -22,6 +22,7 @@ Primary promise: **no silent loss**. Anything unsupported or changed must be sur
 - If a format feature is not supported, **do not guess**. Drop it and emit a structured issue with a stable code.
 - Do not add runtime dependencies unless they are necessary. If adding one, keep it small and widely used.
 - No network calls, no telemetry, no background daemons.
+- Use **bun** for dependency installation and running scripts (e.g., `bun install`, `bun run test`).
 
 ## Non-negotiable invariants
 
@@ -78,6 +79,7 @@ Commands to implement:
 - `umft schema report`
 
 Exit codes:
+
 - `0` success with no WARN/ERROR issues
 - `1` success with WARN issues
 - `2` fatal failure (parse/write/unsupported)
@@ -119,11 +121,13 @@ If golden outputs change, the change must be explained in docs (contract update)
 ## Dependency policy
 
 Preferred approach:
+
 - Implement MIDI parsing/writing in-house unless a dependency is clearly better and stable.
 - XML parsing may use a small library; avoid DOM-heavy dependencies if possible.
 - Zip reading for `.mxl` must defend against zip-slip and decompression bombs.
 
 If introducing a new runtime dependency:
+
 - justify it in the PR description (what it replaces and why)
 - add focused tests around it
 - ensure it does not reduce determinism
@@ -143,6 +147,7 @@ Treat typos in docs as WARN-level issues if they affect clarity of the specs.
 ## ExecPlans (for large work)
 
 If asked to implement a multi-step feature (new adapter, major refactor, contract overhaul):
+
 - Create or update an execution plan in `PLANS.md` (or `docs/plans/<topic>.md`) before coding.
 - The plan must include: scope, milestones, acceptance criteria, test strategy, and rollback notes.
 - Keep the plan updated as work progresses.
@@ -158,7 +163,7 @@ Use Node.js + TypeScript. Establish these scripts in `package.json`:
 - `npm run typecheck`
 
 Keep the tool runnable via:
+
 - `node dist/cli.js ...`
 - and installable as `umft` via `bin` in `package.json`.
-
 ```

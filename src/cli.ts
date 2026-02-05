@@ -8,10 +8,7 @@ const notImplemented = (cmd: string) => {
   process.exitCode = 2;
 };
 
-program
-  .name('umft')
-  .description('Universal Music File Translator')
-  .version('0.1.0');
+program.name('umft').description('Universal Music File Translator').version('0.1.0');
 
 program
   .command('convert')

@@ -1,9 +1,11 @@
 # UMFT MVP Execution Plan
 
 ## Scope
+
 Deliver a deterministic, test-backed CLI that converts MIDI and MusicXML with fidelity reporting via IR round-trip diffing. AAF/OMF are inspect-only in MVP with explicit unsupported reporting.
 
 ## Milestones
+
 1. **Repo Scaffold + Tooling**
    - Initialize TypeScript project structure.
    - Add build, test, lint, format, typecheck scripts.
@@ -50,11 +52,12 @@ Deliver a deterministic, test-backed CLI that converts MIDI and MusicXML with fi
    - Convert path fails cleanly with issues.
 
 10. **Polish + Docs + Fixtures**
-   - Add fixtures and golden outputs.
-   - Align `docs/` with behavior.
-   - CI-ready scripts and deterministic output checks.
+    - Add fixtures and golden outputs.
+    - Align `docs/` with behavior.
+    - CI-ready scripts and deterministic output checks.
 
 ## Acceptance Criteria
+
 - MIDI→MIDI round-trip yields PERFECT/EQUIVALENT for core events.
 - MIDI→MusicXML on quantized fixtures yields ≥90% perfect pitch+duration notes.
 - MusicXML→MIDI preserves core timing; repeats ignored with explicit issues.
@@ -62,10 +65,12 @@ Deliver a deterministic, test-backed CLI that converts MIDI and MusicXML with fi
 - Strict policy returns exit code 3 when DROPPED/ERROR exist.
 
 ## Test Strategy
+
 - Unit tests: canonicalization, ID hashing, diff tolerances, quantization helpers.
 - Golden tests: MIDI↔MIDI and MIDI↔MusicXML report summaries.
 - Negative tests: malformed MIDI/XML, zip-slip, decompression bomb.
 
 ## Rollback Notes
+
 - Each milestone lands in small, reversible commits.
 - Contracts and issue codes only expand, never rename.
