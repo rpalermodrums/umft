@@ -24,10 +24,12 @@
   },
   "dependencies": {
     "commander": "^12.1.0",
-    "fast-xml-parser": "^4.4.1"
+    "fast-xml-parser": "^4.4.1",
+    "yauzl": "^2.10.0"
   },
   "devDependencies": {
     "@types/node": "^20.11.30",
+    "@types/yauzl": "^2.10.0",
     "@typescript-eslint/eslint-plugin": "^7.3.1",
     "@typescript-eslint/parser": "^7.3.1",
     "eslint": "^8.57.0",

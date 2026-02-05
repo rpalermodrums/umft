@@ -19,6 +19,16 @@ This catalog is **normative** for the codes currently implemented in the codebas
   - Trigger: Output path exists and overwrite disabled.
   - Message: Output already exists: {path}. Use --overwrite to replace.
 
+- `CORE_ZIP_SLIP_BLOCKED`
+  - Severity: ERROR | Category: STRUCTURE
+  - Trigger: Zip entry attempts directory traversal.
+  - Message: Blocked unsafe zip path: {entryName}.
+
+- `CORE_DECOMPRESSION_LIMIT_EXCEEDED`
+  - Severity: ERROR | Category: STRUCTURE
+  - Trigger: Decompressed size exceeds configured limit.
+  - Message: Decompression limit exceeded while reading {path}.
+
 ## DIFF\_\*
 
 - `DIFF_ROUNDTRIP_IMPORT_FAILED`
@@ -102,3 +112,10 @@ This catalog is **normative** for the codes currently implemented in the codebas
   - Severity: WARN | Category: TIMING
   - Trigger: Note-on without matching note-off.
   - Message: Missing note-off; note closed at end of track: pitch={pitch}, ch={channel}.
+
+## MXML\_\*
+
+- `MXML_COMPRESSED_MXL_READ_FAILED`
+  - Severity: ERROR | Category: STRUCTURE
+  - Trigger: Failed to read compressed MusicXML (.mxl).
+  - Message: Failed to read compressed MusicXML (.mxl): {reason}.
