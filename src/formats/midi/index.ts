@@ -1,6 +1,7 @@
 import { promises as fs } from 'node:fs';
 import { basename } from 'node:path';
 import { IssueCodes } from '../../core/issues';
+import { atomicWriteFile, ensureDirForFile } from '../../core/io';
 import { canonicalizeProject, IRMarker, IRProject } from '../../core/ir';
 import {
   FormatAdapter,
@@ -91,7 +92,8 @@ export const midiAdapter: FormatAdapter = {
       }
     }
 
-    await fs.writeFile(path, data);
+    await ensureDirForFile(path);
+    await atomicWriteFile(path, data);
     return { warnings: [], issues: [] };
   },
   capabilities() {

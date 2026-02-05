@@ -1,6 +1,7 @@
 import { promises as fs } from 'node:fs';
 import { basename, extname } from 'node:path';
 import { XMLBuilder, XMLParser } from 'fast-xml-parser';
+import { atomicWriteFile, ensureDirForFile } from '../../core/io';
 import { canonicalizeProject, IRMarker, IRProject, IRTimeSignature } from '../../core/ir';
 import {
   FormatAdapter,
@@ -72,7 +73,8 @@ export const musicxmlAdapter: FormatAdapter = {
   async export(ir: IRProject, path: string, opts: ExportOptions): Promise<ExportResult> {
     void opts;
     const xml = buildMusicXml(ir);
-    await fs.writeFile(path, xml, 'utf8');
+    await ensureDirForFile(path);
+    await atomicWriteFile(path, xml);
     return { warnings: [], issues: [] };
   },
   capabilities() {
