@@ -182,7 +182,7 @@ function parseMusicXml(content: string, path: string, ppq = 960): MusicXmlParseR
       for (const note of notes) {
         const noteRecord = asRecord(note);
         const duration = Number(noteRecord.duration ?? 0);
-        const isRest = Boolean(noteRecord.rest);
+        const isRest = Object.prototype.hasOwnProperty.call(noteRecord, 'rest');
         const ticks = Math.max(1, Math.round((duration * ppq) / divisions));
         if (!isRest) {
           const pitch = asRecord(noteRecord.pitch);
