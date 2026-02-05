@@ -1,5 +1,6 @@
 import {
   IRCCEvent,
+  IRArticulationEvent,
   IRDynamicEvent,
   IREvent,
   IRMarker,
