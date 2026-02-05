@@ -46,4 +46,40 @@ describe('golden convert', () => {
 
     await rm(dir, { recursive: true, force: true });
   });
+
+  it('midi->musicxml matches golden output', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'umft-golden-mxml-'));
+    const inputPath = join('test', 'fixtures', 'simple.mid');
+    const outPath = join(dir, 'out.musicxml');
+    const reportPath = join(dir, 'report.json');
+
+    const job: ConvertJob = {
+      inputPath,
+      targetFormat: 'musicxml',
+      outPath,
+      reportPath,
+      policy: 'best-effort',
+      profile: DEFAULT_CONFIG.profile,
+      config: DEFAULT_CONFIG,
+      flags: {
+        overwrite: true,
+        reportFormat: 'json',
+        noReport: true,
+      },
+    };
+
+    const result = await runConvert(job);
+    assert.equal(result.exitCode, 0);
+
+    const actual = await readFile(outPath, 'utf8');
+    const expected = await readFile(join('test', 'golden', 'simple.musicxml'), 'utf8');
+    assert.equal(actual, expected);
+
+    const report = result.report as ConversionReport;
+    assert.equal(report.input.format, 'midi');
+    assert.equal(report.output.format, 'musicxml');
+    assert.equal(report.summary.errors, 0);
+
+    await rm(dir, { recursive: true, force: true });
+  });
 });
