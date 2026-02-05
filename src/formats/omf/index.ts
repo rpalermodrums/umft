@@ -15,13 +15,25 @@ export const omfAdapter: FormatAdapter = {
   },
   async inspect(path: string): Promise<InspectResult> {
     const stats = await fs.stat(path);
+    const header = await readHeader(path, 16);
+    const magic = header.subarray(0, 4).toString('ascii');
+    const versionGuess =
+      magic === 'OMF2' ? '2' : magic === 'OMFI' ? '1' : magic.trim() || 'unknown';
+
+    const warnings = ['OMF inspect-only subset in v0.1'];
+    if (magic !== 'OMFI' && magic !== 'OMF2') {
+      warnings.push('OMF header magic not recognized.');
+    }
     return {
       format: 'omf',
       details: {
         size: stats.size,
+        headerHex: header.toString('hex'),
+        magic,
+        versionGuess,
         subset: 'inspect-only',
       },
-      warnings: ['OMF inspect-only subset in v0.1'],
+      warnings,
     };
   },
   async import(path: string, opts: ImportOptions): Promise<ImportResult> {
@@ -39,3 +51,14 @@ export const omfAdapter: FormatAdapter = {
     return { supportsImport: false, supportsExport: false, supportsInspect: true };
   },
 };
+
+async function readHeader(path: string, length: number): Promise<Buffer> {
+  const handle = await fs.open(path, 'r');
+  try {
+    const buffer = Buffer.alloc(length);
+    const { bytesRead } = await handle.read(buffer, 0, length, 0);
+    return buffer.subarray(0, bytesRead);
+  } finally {
+    await handle.close();
+  }
+}
