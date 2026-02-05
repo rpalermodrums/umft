@@ -8,7 +8,7 @@ export const DEFAULT_TOLERANCES = {
   velocity: 1,
 };
 
-const GENERIC_CONTRACT: MappingContract = {
+export const GENERIC_CONTRACT: MappingContract = {
   name: 'generic',
   version: '1.0',
   source: 'generic',

@@ -20,9 +20,9 @@ describe('negative inputs', () => {
     header.writeUInt16BE(480, 12);
     await writeFile(path, header);
 
-    await assert.rejects(async () => {
-      await midiAdapter.import(path, { defaultPPQ: 480 });
-    });
+    const result = await midiAdapter.import(path, { defaultPPQ: 480 });
+    assert.equal(result.ok, false);
+    assert.equal(result.fatalError?.code, 'MIDI_UNSUPPORTED_HEADER');
 
     await rm(dir, { recursive: true, force: true });
   });
@@ -32,9 +32,9 @@ describe('negative inputs', () => {
     const path = join(dir, 'bad.musicxml');
     await writeFile(path, '<score-partwise><part');
 
-    await assert.rejects(async () => {
-      await musicxmlAdapter.import(path, { defaultPPQ: 480 });
-    });
+    const result = await musicxmlAdapter.import(path, { defaultPPQ: 480 });
+    assert.equal(result.ok, false);
+    assert.equal(result.fatalError?.code, 'MXML_PARSE_FAILED');
 
     await rm(dir, { recursive: true, force: true });
   });
@@ -59,9 +59,9 @@ describe('negative inputs', () => {
       zipfile.outputStream.on('error', reject);
     });
 
-    await assert.rejects(async () => {
-      await musicxmlAdapter.import(path, { defaultPPQ: 480 });
-    }, /CORE_DECOMPRESSION_LIMIT_EXCEEDED/);
+    const result = await musicxmlAdapter.import(path, { defaultPPQ: 480 });
+    assert.equal(result.ok, false);
+    assert.equal(result.fatalError?.code, 'CORE_DECOMPRESSION_LIMIT_EXCEEDED');
 
     await rm(dir, { recursive: true, force: true });
   });

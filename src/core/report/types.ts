@@ -2,6 +2,8 @@ import { Issue } from '../issues';
 import { Format } from '../ir';
 import { MappingContract } from '../contracts';
 
+export type ReportFormat = Format | 'unknown';
+
 export interface ConversionReport {
   reportSchemaVersion: '1.0';
   tool: {
@@ -22,7 +24,7 @@ export interface ConversionReport {
   };
   input: {
     path: string;
-    format: Format;
+    format: ReportFormat;
     detectedBy: 'sniff' | 'extension' | 'user';
   };
   output: {
@@ -81,4 +83,5 @@ export interface DiffSummary {
 export interface AdapterDiagnostics {
   parseWarnings?: string[];
   exportWarnings?: string[];
+  configWarnings?: string[];
 }

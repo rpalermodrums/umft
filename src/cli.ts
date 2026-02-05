@@ -28,7 +28,14 @@ program
   .option('--log-level <level>', 'silent|error|warn|info|debug', 'info')
   .action(async (inputPath, options) => {
     const logger = createLogger(options.logLevel);
-    const { config } = await loadConfig({ cwd: process.cwd(), configPath: options.config });
+    const {
+      config,
+      warnings: configWarnings,
+      issues: configIssues,
+    } = await loadConfig({
+      cwd: process.cwd(),
+      configPath: options.config,
+    });
 
     const outPath = options.out ?? defaultOutPath(inputPath, options.to);
     const reportPath =
@@ -43,6 +50,8 @@ program
       policy: options.policy,
       profile: options.profile,
       config,
+      configWarnings,
+      configIssues,
       flags: {
         overwrite: options.overwrite,
         reportFormat: options.reportFormat,
@@ -90,14 +99,36 @@ program
       throw new Error('Unable to detect input format');
     }
     const adapter = getAdapter(format);
-    const { ir, warnings, issues } = await adapter.import(inputPath, {});
+    const result = await adapter.import(inputPath, {});
+    const allIssues = [...result.issues, ...(result.fatalError ? [result.fatalError] : [])];
+    if (!result.ok || !result.ir) {
+      const payload = {
+        format,
+        warnings: result.warnings,
+        issues: allIssues,
+        error: result.fatalError?.message,
+      };
+      if (options.json) {
+        process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+      } else {
+        process.stdout.write(`Format: ${format}\n`);
+        process.stdout.write(`Warnings: ${result.warnings.length}\n`);
+        process.stdout.write(`Issues: ${allIssues.length}\n`);
+        if (result.fatalError) {
+          process.stdout.write(`Error: ${result.fatalError.message}\n`);
+        }
+      }
+      process.exitCode = 2;
+      return;
+    }
+
     const payload = {
       format,
-      warnings,
-      issues,
+      warnings: result.warnings,
+      issues: allIssues,
       stats: {
-        tracks: ir.tracks.length,
-        notes: ir.tracks.reduce(
+        tracks: result.ir.tracks.length,
+        notes: result.ir.tracks.reduce(
           (sum, track) => sum + track.events.filter((e) => e.kind === 'note').length,
           0,
         ),
@@ -107,8 +138,8 @@ program
       process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
     } else {
       process.stdout.write(`Format: ${format}\n`);
-      process.stdout.write(`Warnings: ${warnings.length}\n`);
-      process.stdout.write(`Issues: ${issues.length}\n`);
+      process.stdout.write(`Warnings: ${result.warnings.length}\n`);
+      process.stdout.write(`Issues: ${allIssues.length}\n`);
     }
   });
 

@@ -1,3 +1,5 @@
+import { Issue } from '../issues';
+
 export type PolicyMode = 'best-effort' | 'strict';
 
 export interface UMFTConfig {
@@ -30,6 +32,7 @@ export interface ConfigLoadResult {
   config: UMFTConfig;
   warnings: string[];
   sources: string[];
+  issues: Issue[];
 }
 
 export interface ConfigLoadOptions {

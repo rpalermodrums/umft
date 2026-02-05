@@ -1,4 +1,5 @@
 import { promises as fs } from 'node:fs';
+import { IssueCodes } from '../../core/issues';
 import {
   FormatAdapter,
   InspectResult,
@@ -39,13 +40,33 @@ export const aafAdapter: FormatAdapter = {
   async import(path: string, opts: ImportOptions): Promise<ImportResult> {
     void path;
     void opts;
-    throw new Error('AAF import not implemented in v0.1 (inspect-only)');
+    return {
+      ok: false,
+      warnings: [],
+      issues: [],
+      fatalError: {
+        code: IssueCodes.CORE_UNSUPPORTED_CONVERSION_PAIR,
+        severity: 'ERROR',
+        category: 'STRUCTURE',
+        message: 'AAF import not implemented in v0.1 (inspect-only).',
+      },
+    };
   },
   async export(ir: unknown, path: string, opts: ExportOptions): Promise<ExportResult> {
     void ir;
     void path;
     void opts;
-    throw new Error('AAF export not implemented in v0.1 (inspect-only)');
+    return {
+      ok: false,
+      warnings: [],
+      issues: [],
+      fatalError: {
+        code: IssueCodes.CORE_UNSUPPORTED_CONVERSION_PAIR,
+        severity: 'ERROR',
+        category: 'STRUCTURE',
+        message: 'AAF export not implemented in v0.1 (inspect-only).',
+      },
+    };
   },
   capabilities() {
     return { supportsImport: false, supportsExport: false, supportsInspect: true };

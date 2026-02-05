@@ -25,14 +25,18 @@ export interface ExportOptions {
 }
 
 export interface ImportResult {
-  ir: IRProject;
+  ok: boolean;
+  ir?: IRProject;
   warnings: string[];
   issues: Issue[];
+  fatalError?: Issue;
 }
 
 export interface ExportResult {
+  ok: boolean;
   warnings: string[];
   issues: Issue[];
+  fatalError?: Issue;
 }
 
 export interface FormatAdapter {

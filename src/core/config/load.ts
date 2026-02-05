@@ -5,6 +5,7 @@ import { DEFAULT_CONFIG } from './defaults';
 import { ConfigLoadOptions, ConfigLoadResult, UMFTConfig } from './types';
 import { mergeConfig } from './merge';
 import { sha256Hex, stableStringify } from '../io';
+import { Issue, IssueCodes } from '../issues';
 
 const CONFIG_FILENAME = '.umft.json';
 
@@ -12,11 +13,12 @@ export async function loadConfig(options: ConfigLoadOptions = {}): Promise<Confi
   const cwd = options.cwd ?? process.cwd();
   const sources: string[] = [];
   const warnings: string[] = [];
+  const issues: Issue[] = [];
 
   let config = DEFAULT_CONFIG;
 
   const globalPath = resolve(os.homedir(), CONFIG_FILENAME);
-  const globalConfig = await readConfigFile(globalPath, warnings);
+  const globalConfig = await readConfigFile(globalPath, warnings, issues);
   if (globalConfig) {
     sources.push(globalPath);
     config = mergeConfig(config, globalConfig);
@@ -24,7 +26,7 @@ export async function loadConfig(options: ConfigLoadOptions = {}): Promise<Confi
 
   const projectPath = await findUpwardsConfig(cwd);
   if (projectPath) {
-    const projectConfig = await readConfigFile(projectPath, warnings);
+    const projectConfig = await readConfigFile(projectPath, warnings, issues);
     if (projectConfig) {
       sources.push(projectPath);
       config = mergeConfig(config, projectConfig);
@@ -33,14 +35,19 @@ export async function loadConfig(options: ConfigLoadOptions = {}): Promise<Confi
 
   if (options.configPath) {
     const overridePath = resolve(options.configPath);
-    const overrideConfig = await readConfigFile(overridePath, warnings, options.strict ?? false);
+    const overrideConfig = await readConfigFile(
+      overridePath,
+      warnings,
+      issues,
+      options.strict ?? false,
+    );
     if (overrideConfig) {
       sources.push(overridePath);
       config = mergeConfig(config, overrideConfig);
     }
   }
 
-  return { config, warnings, sources };
+  return { config, warnings, sources, issues };
 }
 
 export function hashConfig(config: UMFTConfig): string {
@@ -51,6 +58,7 @@ export function hashConfig(config: UMFTConfig): string {
 async function readConfigFile(
   filePath: string,
   warnings: string[],
+  issues: Issue[],
   strict = false,
 ): Promise<Partial<UMFTConfig> | null> {
   try {
@@ -59,17 +67,36 @@ async function readConfigFile(
     const { config, unknownKeys } = validateConfig(parsed);
     if (unknownKeys.length) {
       const message = `Unknown config keys ignored: ${unknownKeys.join(', ')}`;
-      if (strict) {
-        throw new Error(message);
-      }
       warnings.push(message);
+      issues.push({
+        code: IssueCodes.CORE_CONFIG_UNKNOWN_KEYS,
+        severity: 'WARN',
+        category: 'STRUCTURE',
+        message,
+      });
+      if (strict) {
+        issues.push({
+          code: IssueCodes.CORE_CONFIG_INVALID,
+          severity: 'ERROR',
+          category: 'STRUCTURE',
+          message: `Invalid config: ${message}`,
+        });
+        return null;
+      }
     }
     return config;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
       return null;
     }
+    const message = `Invalid config: ${(error as Error).message}`;
     warnings.push(`Failed to read config ${filePath}: ${(error as Error).message}`);
+    issues.push({
+      code: IssueCodes.CORE_CONFIG_INVALID,
+      severity: 'ERROR',
+      category: 'STRUCTURE',
+      message,
+    });
     return null;
   }
 }

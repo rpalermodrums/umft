@@ -4,10 +4,35 @@ This catalog is **normative** for the codes currently implemented in the codebas
 
 ## CORE\_\*
 
+- `CORE_INPUT_NOT_FOUND`
+  - Severity: ERROR | Category: STRUCTURE
+  - Trigger: Input path missing/unreadable.
+  - Message: Input not found or unreadable: {path}.
+
+- `CORE_INPUT_UNSUPPORTED_FORMAT`
+  - Severity: ERROR | Category: STRUCTURE
+  - Trigger: Format detection fails or unsupported input.
+  - Message: Unsupported or unrecognized input format: {path}.
+
 - `CORE_UNSUPPORTED_CONVERSION_PAIR`
   - Severity: ERROR | Category: STRUCTURE
   - Trigger: No adapter path or contract for {from}->{to}.
   - Message: Unsupported conversion pair: {from} -> {to}.
+
+- `CORE_ATOMIC_WRITE_FAILED`
+  - Severity: ERROR | Category: STRUCTURE
+  - Trigger: Temp write/rename/fsync fails.
+  - Message: Atomic write failed for {path}: {reason}.
+
+- `CORE_CONFIG_INVALID`
+  - Severity: ERROR | Category: STRUCTURE
+  - Trigger: Config schema validation fails or config cannot be parsed.
+  - Message: Invalid config: {details}.
+
+- `CORE_CONFIG_UNKNOWN_KEYS`
+  - Severity: WARN | Category: STRUCTURE
+  - Trigger: Unknown config keys encountered.
+  - Message: Unknown config keys ignored: {keys}.
 
 - `CORE_NO_SPECIFIC_CONTRACT`
   - Severity: WARN | Category: STRUCTURE
@@ -113,6 +138,16 @@ This catalog is **normative** for the codes currently implemented in the codebas
 
 ## MIDI\_\*
 
+- `MIDI_UNSUPPORTED_HEADER`
+  - Severity: ERROR | Category: STRUCTURE
+  - Trigger: Header invalid / unsupported.
+  - Message: Unsupported or invalid MIDI header: {details}.
+
+- `MIDI_RUNNING_STATUS_MALFORMED`
+  - Severity: ERROR | Category: STRUCTURE
+  - Trigger: Running status sequence invalid.
+  - Message: Malformed running status at byte {offset}.
+
 - `MIDI_SMPTE_TIME_DIVISION_APPROXIMATED`
   - Severity: WARN | Category: TIMING
   - Trigger: SMPTE time division encountered; approximated to PPQ.
@@ -124,6 +159,11 @@ This catalog is **normative** for the codes currently implemented in the codebas
   - Message: Missing note-off; note closed at end of track: pitch={pitch}, ch={channel}.
 
 ## MXML\_\*
+
+- `MXML_PARSE_FAILED`
+  - Severity: ERROR | Category: STRUCTURE
+  - Trigger: XML parse error.
+  - Message: MusicXML parse failed: {reason}.
 
 - `MXML_COMPRESSED_MXL_READ_FAILED`
   - Severity: ERROR | Category: STRUCTURE

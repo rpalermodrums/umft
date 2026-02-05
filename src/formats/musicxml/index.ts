@@ -29,6 +29,24 @@ const builder = new XMLBuilder({
 
 const MAX_MXL_UNCOMPRESSED = 50 * 1024 * 1024;
 
+class MusicXmlReadError extends Error {
+  issue: Issue;
+  constructor(issue: Issue) {
+    super(issue.message);
+    this.issue = issue;
+    this.name = 'MusicXmlReadError';
+  }
+}
+
+class MusicXmlParseError extends Error {
+  issue: Issue;
+  constructor(issue: Issue) {
+    super(issue.message);
+    this.issue = issue;
+    this.name = 'MusicXmlParseError';
+  }
+}
+
 export const musicxmlAdapter: FormatAdapter = {
   format: 'musicxml',
   async sniff(input: Buffer, pathHint?: string): Promise<boolean> {
@@ -54,31 +72,58 @@ export const musicxmlAdapter: FormatAdapter = {
     };
   },
   async import(path: string, opts: ImportOptions): Promise<ImportResult> {
-    const data = await readMusicXmlText(path);
-    const parsed = parseMusicXml(data, path, opts.defaultPPQ ?? 960);
-    const ir: IRProject = canonicalizeProject({
-      irVersion: '1.0',
-      projectId: `musicxml:${basename(path)}`,
-      meta: { sourceFormat: 'musicxml', sourcePath: path },
-      timing: parsed.timing,
-      tracks: parsed.tracks.map((track) => ({
-        id: '',
-        name: track.name,
-        type: 'notation',
-        notation: { partId: track.partId, instrumentName: track.name },
-        events: track.events,
-      })),
-      markers: parsed.markers,
-    });
+    try {
+      const data = await readMusicXmlText(path);
+      const parsed = parseMusicXml(data, path, opts.defaultPPQ ?? 960);
+      const ir: IRProject = canonicalizeProject({
+        irVersion: '1.0',
+        projectId: `musicxml:${basename(path)}`,
+        meta: { sourceFormat: 'musicxml', sourcePath: path },
+        timing: parsed.timing,
+        tracks: parsed.tracks.map((track) => ({
+          id: '',
+          name: track.name,
+          type: 'notation',
+          notation: { partId: track.partId, instrumentName: track.name },
+          events: track.events,
+        })),
+        markers: parsed.markers,
+      });
 
-    return { ir, warnings: parsed.warnings, issues: parsed.issues };
+      return { ok: true, ir, warnings: parsed.warnings, issues: parsed.issues };
+    } catch (error) {
+      const issue: Issue =
+        error instanceof MusicXmlReadError || error instanceof MusicXmlParseError
+          ? error.issue
+          : {
+              code: IssueCodes.MXML_PARSE_FAILED,
+              severity: 'ERROR',
+              category: 'STRUCTURE',
+              message: `MusicXML parse failed: ${(error as Error).message}.`,
+            };
+      return { ok: false, warnings: [], issues: [], fatalError: issue };
+    }
   },
   async export(ir: IRProject, path: string, opts: ExportOptions): Promise<ExportResult> {
     const config = opts.config ?? DEFAULT_CONFIG;
     const result = buildMusicXml(ir, config);
-    await ensureDirForFile(path);
-    await atomicWriteFile(path, result.xml);
-    return { warnings: result.warnings, issues: result.issues };
+    try {
+      await ensureDirForFile(path);
+      await atomicWriteFile(path, result.xml);
+      return { ok: true, warnings: result.warnings, issues: result.issues };
+    } catch (error) {
+      return {
+        ok: false,
+        warnings: result.warnings,
+        issues: result.issues,
+        fatalError: {
+          code: IssueCodes.CORE_ATOMIC_WRITE_FAILED,
+          severity: 'ERROR',
+          category: 'STRUCTURE',
+          message: `Atomic write failed for ${path}: ${(error as Error).message}.`,
+        },
+      };
+    }
   },
   capabilities() {
     return { supportsImport: true, supportsExport: true, supportsInspect: true };
@@ -108,12 +153,22 @@ function parseMusicXml(content: string, path: string, ppq = 960): MusicXmlParseR
   try {
     parsed = parser.parse(content) as Record<string, unknown>;
   } catch (error) {
-    throw new Error(`MusicXML parse failed: ${(error as Error).message}`);
+    throw new MusicXmlParseError({
+      code: IssueCodes.MXML_PARSE_FAILED,
+      severity: 'ERROR',
+      category: 'STRUCTURE',
+      message: `MusicXML parse failed: ${(error as Error).message}.`,
+    });
   }
 
   const score = (parsed as { 'score-partwise'?: unknown })['score-partwise'];
   if (!score) {
-    throw new Error('Missing <score-partwise> root');
+    throw new MusicXmlParseError({
+      code: IssueCodes.MXML_PARSE_FAILED,
+      severity: 'ERROR',
+      category: 'STRUCTURE',
+      message: 'MusicXML parse failed: missing <score-partwise> root.',
+    });
   }
 
   const scoreRecord = asRecord(score);
@@ -227,9 +282,12 @@ async function readCompressedMxl(path: string): Promise<string> {
       (error, zipfile) => {
         if (error || !zipfile) {
           reject(
-            new Error(
-              `${IssueCodes.MXML_COMPRESSED_MXL_READ_FAILED}: ${error?.message ?? 'Unable to open .mxl'}.`,
-            ),
+            new MusicXmlReadError({
+              code: IssueCodes.MXML_COMPRESSED_MXL_READ_FAILED,
+              severity: 'ERROR',
+              category: 'STRUCTURE',
+              message: `Failed to read compressed MusicXML (.mxl): ${error?.message ?? 'Unable to open .mxl'}.`,
+            }),
           );
           return;
         }
@@ -240,11 +298,11 @@ async function readCompressedMxl(path: string): Promise<string> {
         let fallbackEntry: yauzl.Entry | undefined;
         let finished = false;
 
-        const finalizeError = (message: string) => {
+        const finalizeError = (issue: Issue) => {
           if (finished) return;
           finished = true;
           zipfile.close();
-          reject(new Error(message));
+          reject(new MusicXmlReadError(issue));
         };
 
         const finalizeSuccess = (payload: string) => {
@@ -262,9 +320,12 @@ async function readCompressedMxl(path: string): Promise<string> {
         zipfile.on('entry', (entry) => {
           const name = entry.fileName.replace(/\\/g, '/');
           if (isUnsafeZipEntry(name)) {
-            finalizeError(
-              `${IssueCodes.CORE_ZIP_SLIP_BLOCKED}: Blocked unsafe zip path: ${entry.fileName}.`,
-            );
+            finalizeError({
+              code: IssueCodes.CORE_ZIP_SLIP_BLOCKED,
+              severity: 'ERROR',
+              category: 'STRUCTURE',
+              message: `Blocked unsafe zip path: ${entry.fileName}.`,
+            });
             return;
           }
           if (name.endsWith('/')) {
@@ -288,7 +349,16 @@ async function readCompressedMxl(path: string): Promise<string> {
                 readNextEntry();
               })
               .catch((err) => {
-                finalizeError(err.message);
+                finalizeError(
+                  err instanceof MusicXmlReadError
+                    ? err.issue
+                    : {
+                        code: IssueCodes.MXML_COMPRESSED_MXL_READ_FAILED,
+                        severity: 'ERROR',
+                        category: 'STRUCTURE',
+                        message: `Failed to read compressed MusicXML (.mxl): ${(err as Error).message}.`,
+                      },
+                );
               });
             return;
           }
@@ -304,9 +374,12 @@ async function readCompressedMxl(path: string): Promise<string> {
             if (rootPath) {
               const normalized = rootPath.replace(/\\/g, '/');
               if (isUnsafeZipEntry(normalized)) {
-                finalizeError(
-                  `${IssueCodes.CORE_ZIP_SLIP_BLOCKED}: Blocked unsafe zip path: ${rootPath}.`,
-                );
+                finalizeError({
+                  code: IssueCodes.CORE_ZIP_SLIP_BLOCKED,
+                  severity: 'ERROR',
+                  category: 'STRUCTURE',
+                  message: `Blocked unsafe zip path: ${rootPath}.`,
+                });
                 return;
               }
               targetEntry = entries.get(normalized);
@@ -318,27 +391,49 @@ async function readCompressedMxl(path: string): Promise<string> {
           }
 
           if (!targetEntry) {
-            finalizeError(
-              `${IssueCodes.MXML_COMPRESSED_MXL_READ_FAILED}: No MusicXML payload found in ${path}.`,
-            );
+            finalizeError({
+              code: IssueCodes.MXML_COMPRESSED_MXL_READ_FAILED,
+              severity: 'ERROR',
+              category: 'STRUCTURE',
+              message: `Failed to read compressed MusicXML (.mxl): No MusicXML payload found in ${path}.`,
+            });
             return;
           }
 
           void readZipEntryText(zipfile, targetEntry, state)
             .then((xml) => finalizeSuccess(xml))
-            .catch((err) => finalizeError(err.message));
+            .catch((err) => {
+              finalizeError(
+                err instanceof MusicXmlReadError
+                  ? err.issue
+                  : {
+                      code: IssueCodes.MXML_COMPRESSED_MXL_READ_FAILED,
+                      severity: 'ERROR',
+                      category: 'STRUCTURE',
+                      message: `Failed to read compressed MusicXML (.mxl): ${(err as Error).message}.`,
+                    },
+              );
+            });
         });
 
         zipfile.on('error', (err) => {
           const message = (err as Error).message;
           if (message.includes('invalid relative path')) {
             const pathMatch = message.split(':').slice(1).join(':').trim();
-            finalizeError(
-              `${IssueCodes.CORE_ZIP_SLIP_BLOCKED}: Blocked unsafe zip path: ${pathMatch || message}.`,
-            );
+            finalizeError({
+              code: IssueCodes.CORE_ZIP_SLIP_BLOCKED,
+              severity: 'ERROR',
+              category: 'STRUCTURE',
+              message: `Blocked unsafe zip path: ${pathMatch || message}.`,
+            });
             return;
           }
-          finalizeError(`${IssueCodes.MXML_COMPRESSED_MXL_READ_FAILED}: ${message}.`);
+          finalizeError({
+            code: IssueCodes.MXML_COMPRESSED_MXL_READ_FAILED,
+            severity: 'ERROR',
+            category: 'STRUCTURE',
+            message: `Failed to read compressed MusicXML (.mxl): ${message}.`,
+          });
         });
 
         readNextEntry();
@@ -356,9 +451,12 @@ function readZipEntryText(
     const projected = state.totalRead + entry.uncompressedSize;
     if (projected > state.limit) {
       reject(
-        new Error(
-          `${IssueCodes.CORE_DECOMPRESSION_LIMIT_EXCEEDED}: Decompression limit exceeded while reading ${entry.fileName}.`,
-        ),
+        new MusicXmlReadError({
+          code: IssueCodes.CORE_DECOMPRESSION_LIMIT_EXCEEDED,
+          severity: 'ERROR',
+          category: 'STRUCTURE',
+          message: `Decompression limit exceeded while reading ${entry.fileName}.`,
+        }),
       );
       return;
     }
@@ -366,9 +464,12 @@ function readZipEntryText(
     zipfile.openReadStream(entry, (err, stream) => {
       if (err || !stream) {
         reject(
-          new Error(
-            `${IssueCodes.MXML_COMPRESSED_MXL_READ_FAILED}: ${err?.message ?? 'Unable to read entry'}.`,
-          ),
+          new MusicXmlReadError({
+            code: IssueCodes.MXML_COMPRESSED_MXL_READ_FAILED,
+            severity: 'ERROR',
+            category: 'STRUCTURE',
+            message: `Failed to read compressed MusicXML (.mxl): ${err?.message ?? 'Unable to read entry'}.`,
+          }),
         );
         return;
       }
@@ -379,9 +480,12 @@ function readZipEntryText(
         readBytes += chunk.length;
         if (state.totalRead + readBytes > state.limit) {
           stream.destroy(
-            new Error(
-              `${IssueCodes.CORE_DECOMPRESSION_LIMIT_EXCEEDED}: Decompression limit exceeded while reading ${entry.fileName}.`,
-            ),
+            new MusicXmlReadError({
+              code: IssueCodes.CORE_DECOMPRESSION_LIMIT_EXCEEDED,
+              severity: 'ERROR',
+              category: 'STRUCTURE',
+              message: `Decompression limit exceeded while reading ${entry.fileName}.`,
+            }),
           );
           return;
         }
@@ -389,9 +493,12 @@ function readZipEntryText(
       });
       stream.on('error', (streamErr) => {
         reject(
-          new Error(
-            `${IssueCodes.MXML_COMPRESSED_MXL_READ_FAILED}: ${(streamErr as Error).message}.`,
-          ),
+          new MusicXmlReadError({
+            code: IssueCodes.MXML_COMPRESSED_MXL_READ_FAILED,
+            severity: 'ERROR',
+            category: 'STRUCTURE',
+            message: `Failed to read compressed MusicXML (.mxl): ${(streamErr as Error).message}.`,
+          }),
         );
       });
       stream.on('end', () => {

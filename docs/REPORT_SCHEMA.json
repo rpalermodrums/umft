@@ -122,6 +122,13 @@
       "items": { "type": "object" }
     },
     "diffs": { "type": "object" },
-    "diagnostics": { "type": "object" }
+    "diagnostics": {
+      "type": "object",
+      "properties": {
+        "parseWarnings": { "type": "array", "items": { "type": "string" } },
+        "exportWarnings": { "type": "array", "items": { "type": "string" } },
+        "configWarnings": { "type": "array", "items": { "type": "string" } }
+      }
+    }
   }
 }

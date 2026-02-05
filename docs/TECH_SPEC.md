@@ -21,7 +21,7 @@ IR types live in `src/core/ir/` and include:
 
 - `IRProject` with timing, tracks, markers, and optional media domain
 - `IRTrack` events: note, cc, pitchbend, text, lyric, dynamic, articulation
-- Stable IDs via SHA-256 over canonical strings
+- Stable IDs via SHA-256 over canonical strings (format-agnostic `stableId` for cross-format diffing)
 - Canonical ordering for determinism
 
 ## CLI
@@ -68,7 +68,7 @@ Markdown report is derived from JSON with deterministic ordering.
 
 - Import: partwise subset (measures, divisions, notes, time sig, tempo)
 - Export: partwise with divisions set to PPQ; durations mapped to basic note types
-- `.mxl` compressed input not yet supported
+- `.mxl` compressed input supported with zip-slip protection and decompression limits
 
 ### AAF / OMF
 

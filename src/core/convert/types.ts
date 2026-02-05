@@ -1,4 +1,5 @@
 import { UMFTConfig } from '../config';
+import { Issue } from '../issues';
 import { Format, IRProject } from '../ir';
 
 export interface ConvertJob {
@@ -10,6 +11,8 @@ export interface ConvertJob {
   policy: 'best-effort' | 'strict';
   profile: string;
   config: UMFTConfig;
+  configIssues?: Issue[];
+  configWarnings?: string[];
   flags: {
     overwrite: boolean;
     emitIrDir?: string;

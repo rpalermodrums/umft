@@ -1,6 +1,6 @@
 import { promises as fs } from 'node:fs';
 import { basename } from 'node:path';
-import { IssueCodes } from '../../core/issues';
+import { Issue, IssueCodes } from '../../core/issues';
 import { atomicWriteFile, ensureDirForFile } from '../../core/io';
 import { canonicalizeProject, IRMarker, IRProject } from '../../core/ir';
 import {
@@ -14,6 +14,15 @@ import {
 
 const MIDI_HEADER = Buffer.from('MThd');
 const MIDI_TRACK = Buffer.from('MTrk');
+
+class MidiParseError extends Error {
+  issue: Issue;
+  constructor(issue: Issue) {
+    super(issue.message);
+    this.issue = issue;
+    this.name = 'MidiParseError';
+  }
+}
 
 interface ParsedTrack {
   name: string;
@@ -49,27 +58,41 @@ export const midiAdapter: FormatAdapter = {
   },
   async import(path: string, opts: ImportOptions): Promise<ImportResult> {
     const data = await fs.readFile(path);
-    const parsed = parseMidi(data, opts);
-    const ir: IRProject = canonicalizeProject({
-      irVersion: '1.0',
-      projectId: `midi:${basename(path)}`,
-      meta: { sourceFormat: 'midi', sourcePath: path },
-      timing: parsed.timing,
-      tracks: parsed.tracks.map((track) => ({
-        id: '',
-        name: track.name,
-        type: 'midi',
-        midi: { channel: track.channel, program: track.program },
-        events: track.events,
-      })),
-      markers: parsed.markers,
-    });
+    try {
+      const parsed = parseMidi(data, opts);
+      const ir: IRProject = canonicalizeProject({
+        irVersion: '1.0',
+        projectId: `midi:${basename(path)}`,
+        meta: { sourceFormat: 'midi', sourcePath: path },
+        timing: parsed.timing,
+        tracks: parsed.tracks.map((track) => ({
+          id: '',
+          name: track.name,
+          type: 'midi',
+          midi: { channel: track.channel, program: track.program },
+          events: track.events,
+        })),
+        markers: parsed.markers,
+      });
 
-    return {
-      ir,
-      warnings: parsed.warnings,
-      issues: parsed.issues,
-    };
+      return {
+        ok: true,
+        ir,
+        warnings: parsed.warnings,
+        issues: parsed.issues,
+      };
+    } catch (error) {
+      const issue: Issue =
+        error instanceof MidiParseError
+          ? error.issue
+          : {
+              code: IssueCodes.MIDI_UNSUPPORTED_HEADER,
+              severity: 'ERROR',
+              category: 'STRUCTURE',
+              message: `Unsupported or invalid MIDI header: ${(error as Error).message}.`,
+            };
+      return { ok: false, warnings: [], issues: [], fatalError: issue };
+    }
   },
   async export(ir: IRProject, path: string, opts: ExportOptions): Promise<ExportResult> {
     const data = writeMidi(ir);
@@ -77,24 +100,38 @@ export const midiAdapter: FormatAdapter = {
       try {
         await fs.access(path);
         return {
+          ok: false,
           warnings: [],
-          issues: [
-            {
-              code: IssueCodes.CORE_OUTPUT_PATH_EXISTS,
-              severity: 'ERROR',
-              category: 'STRUCTURE',
-              message: `Output already exists: ${path}. Use --overwrite to replace.`,
-            },
-          ],
+          issues: [],
+          fatalError: {
+            code: IssueCodes.CORE_OUTPUT_PATH_EXISTS,
+            severity: 'ERROR',
+            category: 'STRUCTURE',
+            message: `Output already exists: ${path}. Use --overwrite to replace.`,
+          },
         };
       } catch {
         // ok
       }
     }
 
-    await ensureDirForFile(path);
-    await atomicWriteFile(path, data);
-    return { warnings: [], issues: [] };
+    try {
+      await ensureDirForFile(path);
+      await atomicWriteFile(path, data);
+      return { ok: true, warnings: [], issues: [] };
+    } catch (error) {
+      return {
+        ok: false,
+        warnings: [],
+        issues: [],
+        fatalError: {
+          code: IssueCodes.CORE_ATOMIC_WRITE_FAILED,
+          severity: 'ERROR',
+          category: 'STRUCTURE',
+          message: `Atomic write failed for ${path}: ${(error as Error).message}.`,
+        },
+      };
+    }
   },
   capabilities() {
     return { supportsImport: true, supportsExport: true, supportsInspect: true };
@@ -116,7 +153,12 @@ function parseMidi(buffer: Buffer, opts: ImportOptions): MidiParseResult {
 
   const header = buffer.slice(offset, offset + 4);
   if (!header.equals(MIDI_HEADER)) {
-    throw new Error('Invalid MIDI header');
+    throw new MidiParseError({
+      code: IssueCodes.MIDI_UNSUPPORTED_HEADER,
+      severity: 'ERROR',
+      category: 'STRUCTURE',
+      message: 'Unsupported or invalid MIDI header.',
+    });
   }
   offset += 4;
   const headerLen = buffer.readUInt32BE(offset);
@@ -151,7 +193,12 @@ function parseMidi(buffer: Buffer, opts: ImportOptions): MidiParseResult {
   for (let t = 0; t < trackCount; t += 1) {
     const trackHeader = buffer.slice(offset, offset + 4);
     if (!trackHeader.equals(MIDI_TRACK)) {
-      throw new Error('Invalid MIDI track header');
+      throw new MidiParseError({
+        code: IssueCodes.MIDI_UNSUPPORTED_HEADER,
+        severity: 'ERROR',
+        category: 'STRUCTURE',
+        message: `Unsupported or invalid MIDI track header at byte ${offset}.`,
+      });
     }
     offset += 4;
     const trackLen = buffer.readUInt32BE(offset);
@@ -175,7 +222,12 @@ function parseMidi(buffer: Buffer, opts: ImportOptions): MidiParseResult {
       let statusByte = buffer[offset];
       if (statusByte < 0x80) {
         if (runningStatus === null) {
-          throw new Error('Running status without previous status');
+          throw new MidiParseError({
+            code: IssueCodes.MIDI_RUNNING_STATUS_MALFORMED,
+            severity: 'ERROR',
+            category: 'STRUCTURE',
+            message: `Malformed running status at byte ${offset}.`,
+          });
         }
         statusByte = runningStatus;
       } else {
