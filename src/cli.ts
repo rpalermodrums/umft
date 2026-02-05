@@ -125,5 +125,12 @@ program.parse();
 
 function defaultOutPath(inputPath: string, target: string): string {
   const base = basename(inputPath, extname(inputPath));
-  return join(dirname(inputPath), `${base}.${target}`);
+  const extMap: Record<string, string> = {
+    midi: '.mid',
+    musicxml: '.musicxml',
+    aaf: '.aaf',
+    omf: '.omf',
+  };
+  const ext = extMap[target] ?? `.${target}`;
+  return join(dirname(inputPath), `${base}${ext}`);
 }
