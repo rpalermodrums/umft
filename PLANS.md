@@ -1,5 +1,57 @@
 # UMFT MVP Execution Plan
 
+## UMFT Dockerization + Real-UX E2E Plan
+
+### Scope
+
+Add first-class container workflows for UMFT using Docker Compose + Docker Buildx Bake, and add black-box E2E tests that execute packaged CLI binaries in containers against mounted files.
+
+### Milestones
+
+1. **Container Build Pipeline**
+   - Add a multi-stage `Dockerfile` (`deps`, `build`, `test`, `runtime`).
+   - Add `.dockerignore` to shrink context and improve cache hits.
+   - Ensure runtime image uses a non-root user and exposes `umft` entrypoint.
+
+2. **Compose + Bake Topology**
+   - Add `compose.yaml` with `umft`, `e2e-smoke`, and `e2e-full` services.
+   - Add `docker-bake.hcl` with local runtime, e2e image, and multi-arch validation targets.
+   - Configure groups: `default`, `ci-smoke`, `ci-nightly`.
+
+3. **Black-Box E2E Harness**
+   - Add shared assertions and JSON helpers in `test/e2e/lib/`.
+   - Add PR smoke script covering help/version, convert/inspect/validate, strict/fatal exits, and invalid enum errors.
+   - Add nightly full script covering determinism, config precedence, tolerance overrides, `.mxl` security cases, AAF/OMF inspect-only behavior, overwrite protection, and schema command outside repo root.
+
+4. **Developer + CI Integration**
+   - Add `package.json` scripts for Docker build/smoke/full/multi-arch workflows.
+   - Add GitHub Actions Docker E2E workflow:
+     - PR/push: smoke.
+     - Nightly: full + multi-arch build validation.
+   - Keep existing Bun-native CI checks unchanged.
+
+5. **Docs and Rollout**
+   - Add README Docker quickstart, command references, and troubleshooting.
+   - Record assumptions and rollback path in this plan.
+
+### Acceptance Criteria
+
+- Local `docker compose run --rm umft ...` works with mounted workspace files and correct exit code propagation.
+- PR smoke E2E runs in CI and verifies user-facing CLI behavior as packaged.
+- Nightly full E2E validates deterministic output/report behavior and multi-arch image buildability.
+- Existing `bun run lint`, `bun run typecheck`, and `bun run test` remain green.
+
+### Test Strategy
+
+- Keep current unit/golden tests as source-of-truth for internals.
+- Add containerized black-box E2E as additive confidence layer:
+  - Smoke suite for fast regressions.
+  - Full suite for deep and security-sensitive flows.
+
+### Rollback Notes
+
+- Docker assets are isolated (`Dockerfile`, `compose.yaml`, `docker-bake.hcl`, `test/e2e/`, CI workflow), so rollback is straightforward by reverting those files and scripts.
+
 ## UMFT v0.1 Hardening Plan (Correctness + Coverage + UX)
 
 ### Scope

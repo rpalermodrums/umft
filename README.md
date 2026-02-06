@@ -52,6 +52,33 @@ node dist/cli.js convert /tmp/missing.mid --to midi
 echo $?   # 2 for fatal input/import/export/write failures
 ```
 
+## Docker Quickstart
+
+Build local runtime image (host architecture):
+
+```bash
+bun run docker:build
+```
+
+Run CLI through Compose (real mounted workspace flow):
+
+```bash
+UMFT_UID=$(id -u) UMFT_GID=$(id -g) docker compose run --rm umft convert test/fixtures/simple.mid --to midi --out .e2e-out/manual/simple.mid --report .e2e-out/manual/report.json --overwrite --report-format json
+```
+
+Run black-box containerized E2E suites:
+
+```bash
+bun run docker:test:smoke
+bun run docker:test:full
+```
+
+Validate multi-arch buildability (no publish):
+
+```bash
+bun run docker:build:multiarch
+```
+
 ## CLI Usage
 
 ```bash
@@ -129,9 +156,21 @@ bun run typecheck
 bun run lint
 bun run format
 bun run test
+bun run docker:build
+bun run docker:test:smoke
 ```
 
 Pre-commit/pre-push hooks are managed by `lefthook`.
+
+### Docker Troubleshooting
+
+- Buildx not initialized:
+  - Run `docker buildx ls` and create/select a builder if needed (`docker buildx create --use`).
+- Multi-arch build failures:
+  - Ensure QEMU emulation is configured (`docker run --privileged --rm tonistiigi/binfmt --install all`) or run in CI where setup actions are configured.
+- Mounted volume write permission errors:
+  - Pass host IDs when running Compose:
+    - `UMFT_UID=$(id -u) UMFT_GID=$(id -g) docker compose run --rm ...`
 
 ## Repository Structure
 
