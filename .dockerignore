@@ -1,0 +1,10 @@
+.git
+.github
+node_modules
+dist
+dist-test
+coverage
+.vscode
+.DS_Store
+*.log
+.e2e-out

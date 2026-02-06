@@ -1,0 +1,39 @@
+name: umft
+
+services:
+  umft:
+    image: umft:runtime-local
+    working_dir: /workspace
+    volumes:
+      - ./:/workspace
+    environment:
+      HOME: /tmp/umft-home
+    user: '${UMFT_UID:-1000}:${UMFT_GID:-1000}'
+    entrypoint:
+      - umft
+    command:
+      - --help
+
+  e2e-smoke:
+    image: umft:e2e
+    working_dir: /workspace
+    volumes:
+      - ./:/workspace
+    environment:
+      HOME: /tmp/umft-home
+    user: '${UMFT_UID:-1000}:${UMFT_GID:-1000}'
+    entrypoint:
+      - /bin/sh
+      - /workspace/test/e2e/smoke.sh
+
+  e2e-full:
+    image: umft:e2e
+    working_dir: /workspace
+    volumes:
+      - ./:/workspace
+    environment:
+      HOME: /tmp/umft-home
+    user: '${UMFT_UID:-1000}:${UMFT_GID:-1000}'
+    entrypoint:
+      - /bin/sh
+      - /workspace/test/e2e/full.sh
