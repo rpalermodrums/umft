@@ -20,6 +20,10 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "tsc -p tsconfig.test.json && node --test dist-test/test/**/*.test.js",
+    "docker:build": "docker buildx bake runtime-local",
+    "docker:test:smoke": "docker buildx bake ci-smoke && UMFT_UID=${UMFT_UID:-$(id -u)} UMFT_GID=${UMFT_GID:-$(id -g)} docker compose run --rm e2e-smoke",
+    "docker:test:full": "sh -c 'docker buildx inspect umft-multiarch >/dev/null 2>&1 || docker buildx create --name umft-multiarch --driver docker-container --use; docker buildx use umft-multiarch; docker buildx inspect --bootstrap >/dev/null; docker buildx bake ci-nightly && UMFT_UID=${UMFT_UID:-$(id -u)} UMFT_GID=${UMFT_GID:-$(id -g)} docker compose run --rm e2e-full'",
+    "docker:build:multiarch": "sh -c 'docker buildx inspect umft-multiarch >/dev/null 2>&1 || docker buildx create --name umft-multiarch --driver docker-container --use; docker buildx use umft-multiarch; docker buildx inspect --bootstrap >/dev/null; docker buildx bake runtime-multiarch'",
     "prepare": "lefthook install"
   },
   "dependencies": {

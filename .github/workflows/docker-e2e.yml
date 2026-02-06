@@ -1,0 +1,45 @@
+name: Docker E2E
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+jobs:
+  docker-smoke:
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build smoke images
+        run: docker buildx bake ci-smoke
+
+      - name: Run smoke E2E
+        run: UMFT_UID=$(id -u) UMFT_GID=$(id -g) docker compose run --rm e2e-smoke
+
+  docker-nightly:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build nightly images and validate multi-arch
+        run: docker buildx bake ci-nightly
+
+      - name: Run full E2E
+        run: UMFT_UID=$(id -u) UMFT_GID=$(id -g) docker compose run --rm e2e-full
