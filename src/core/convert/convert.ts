@@ -1,7 +1,7 @@
 import { promises as fs } from 'node:fs';
 import { extname } from 'node:path';
 import { aggregateIssues, Issue, IssueCodes, sortIssues } from '../issues';
-import { GENERIC_CONTRACT, getContract } from '../contracts';
+import { GENERIC_CONTRACT, getContract, MappingContract } from '../contracts';
 import { canonicalizeProject, Format, IRProject } from '../ir';
 import { diffProjects, TrackMappingDiff } from '../diff';
 import { atomicWriteFile, ensureDirForFile } from '../io';
@@ -9,11 +9,64 @@ import { hashConfig } from '../config';
 import { formatReportMarkdown } from '../report/markdown';
 import { ConversionReport, TrackMappingReport } from '../report/types';
 import { detectFormat, getAdapter } from '../../formats/registry';
+import { FormatAdapter } from '../../formats/types';
 import { ConvertJob, ConvertResult } from './types';
+
+const EMPTY_DIFF_SUMMARY: ConversionReport['summary'] = {
+  elementsTotal: 0,
+  perfect: 0,
+  equivalent: 0,
+  approximate: 0,
+  dropped: 0,
+  errors: 0,
+};
 
 export async function runConvert(job: ConvertJob): Promise<ConvertResult> {
   const configIssues = job.configIssues ?? [];
   const configWarnings = job.configWarnings ?? [];
+  const genericContract = applyToleranceOverrides(GENERIC_CONTRACT, job.config.diff);
+
+  const failWithReport = async (params: {
+    detected: Format | 'unknown';
+    contract: MappingContract;
+    issues: Issue[];
+    ir0?: IRProject;
+    ir1?: IRProject;
+    parseWarnings?: string[];
+    exportWarnings?: string[];
+    trackMappings?: TrackMappingReport[];
+    addedElements?: number;
+  }): Promise<ConvertResult> => {
+    const issues = aggregateIssues(params.issues);
+    const report = buildReport({
+      job,
+      detected: params.detected,
+      contract: params.contract,
+      ir0: params.ir0,
+      ir1: params.ir1,
+      issues,
+      addedElements: params.addedElements ?? 0,
+      diffSummary: undefined,
+      trackMappings: params.trackMappings ?? [],
+      parseWarnings: params.parseWarnings ?? [],
+      exportWarnings: params.exportWarnings ?? [],
+      configWarnings,
+    });
+    if (!job.flags.noReport) {
+      await writeReport(job, report);
+    }
+    return {
+      exitCode: determineExitCode({
+        policy: job.policy,
+        issues,
+        fatalFailure: true,
+        strictViolation: false,
+      }),
+      report,
+      ir0: params.ir0,
+      ir1: params.ir1,
+    };
+  };
 
   let inputBuffer: Buffer | null = null;
   try {
@@ -25,25 +78,11 @@ export async function runConvert(job: ConvertJob): Promise<ConvertResult> {
       category: 'STRUCTURE',
       message: `Input not found or unreadable: ${job.inputPath}.`,
     };
-    const issues = aggregateIssues([...configIssues, issue]);
-    const report = buildReport({
-      job,
+    return failWithReport({
       detected: 'unknown',
-      ir0: undefined,
-      ir1: undefined,
-      issues,
-      addedElements: 0,
-      diffSummary: undefined,
-      trackMappings: [],
-      parseWarnings: [],
-      exportWarnings: [],
-      configWarnings,
-      contractOverride: GENERIC_CONTRACT,
+      contract: genericContract,
+      issues: [...configIssues, issue],
     });
-    if (!job.flags.noReport) {
-      await writeReport(job, report);
-    }
-    return { exitCode: determineExitCode(job.policy, issues), report };
   }
 
   const detected = job.inputFormat ?? (await detectFormat(inputBuffer, job.inputPath));
@@ -54,80 +93,62 @@ export async function runConvert(job: ConvertJob): Promise<ConvertResult> {
       category: 'STRUCTURE',
       message: `Unsupported or unrecognized input format: ${job.inputPath}.`,
     };
-    const issues = aggregateIssues([...configIssues, issue]);
-    const report = buildReport({
-      job,
+    return failWithReport({
       detected: 'unknown',
-      ir0: undefined,
-      ir1: undefined,
-      issues,
-      addedElements: 0,
-      diffSummary: undefined,
-      trackMappings: [],
-      parseWarnings: [],
-      exportWarnings: [],
-      configWarnings,
-      contractOverride: GENERIC_CONTRACT,
+      contract: genericContract,
+      issues: [...configIssues, issue],
     });
-    if (!job.flags.noReport) {
-      await writeReport(job, report);
-    }
-    return { exitCode: determineExitCode(job.policy, issues), report };
   }
+
+  const contractResult = getContract(detected, job.targetFormat, job.profile);
+  const effectiveContract = applyToleranceOverrides(contractResult.contract, job.config.diff);
 
   if (configIssues.some((issue) => issue.severity === 'ERROR')) {
-    const issues = aggregateIssues(configIssues);
-    const report = buildReport({
-      job,
+    return failWithReport({
       detected,
-      ir0: undefined,
-      ir1: undefined,
-      issues,
-      addedElements: 0,
-      diffSummary: undefined,
-      trackMappings: [],
-      parseWarnings: [],
-      exportWarnings: [],
-      configWarnings,
+      contract: effectiveContract,
+      issues: configIssues,
     });
-    if (!job.flags.noReport) {
-      await writeReport(job, report);
-    }
-    return { exitCode: determineExitCode(job.policy, issues), report };
   }
 
-  const inputAdapter = getAdapter(detected);
-  const outputAdapter = getAdapter(job.targetFormat);
+  let inputAdapter: FormatAdapter;
+  let outputAdapter: FormatAdapter;
+  try {
+    inputAdapter = getAdapter(detected);
+    outputAdapter = getAdapter(job.targetFormat);
+  } catch {
+    return failWithReport({
+      detected,
+      contract: effectiveContract,
+      issues: [
+        ...configIssues,
+        {
+          code: IssueCodes.CORE_UNSUPPORTED_CONVERSION_PAIR,
+          severity: 'ERROR',
+          category: 'STRUCTURE',
+          message: `Unsupported conversion pair: ${detected} -> ${job.targetFormat}.`,
+        },
+      ],
+    });
+  }
+
   const inputCaps = inputAdapter.capabilities();
   const outputCaps = outputAdapter.capabilities();
 
   if (!inputCaps.supportsImport || !outputCaps.supportsExport) {
-    const issues: Issue[] = [
-      {
-        code: IssueCodes.CORE_UNSUPPORTED_CONVERSION_PAIR,
-        severity: 'ERROR',
-        category: 'STRUCTURE',
-        message: `Unsupported conversion pair: ${detected} -> ${job.targetFormat}.`,
-      },
-      ...configIssues,
-    ];
-    const report = buildReport({
-      job,
+    return failWithReport({
       detected,
-      ir0: undefined,
-      ir1: undefined,
-      issues: aggregateIssues(issues),
-      addedElements: 0,
-      diffSummary: undefined,
-      trackMappings: [],
-      parseWarnings: [],
-      exportWarnings: [],
-      configWarnings,
+      contract: effectiveContract,
+      issues: [
+        ...configIssues,
+        {
+          code: IssueCodes.CORE_UNSUPPORTED_CONVERSION_PAIR,
+          severity: 'ERROR',
+          category: 'STRUCTURE',
+          message: `Unsupported conversion pair: ${detected} -> ${job.targetFormat}.`,
+        },
+      ],
     });
-    if (!job.flags.noReport) {
-      await writeReport(job, report);
-    }
-    return { exitCode: 2, report };
   }
 
   const imported = await inputAdapter.import(job.inputPath, {
@@ -137,28 +158,16 @@ export async function runConvert(job: ConvertJob): Promise<ConvertResult> {
   const importIssues = imported.issues;
 
   if (!imported.ok || !imported.ir) {
-    const issues = aggregateIssues([
-      ...configIssues,
-      ...importIssues,
-      ...(imported.fatalError ? [imported.fatalError] : []),
-    ]);
-    const report = buildReport({
-      job,
+    return failWithReport({
       detected,
-      ir0: undefined,
-      ir1: undefined,
-      issues,
-      addedElements: 0,
-      diffSummary: undefined,
-      trackMappings: [],
+      contract: effectiveContract,
+      issues: [
+        ...configIssues,
+        ...importIssues,
+        ...(imported.fatalError ? [imported.fatalError] : []),
+      ],
       parseWarnings: importWarnings,
-      exportWarnings: [],
-      configWarnings,
     });
-    if (!job.flags.noReport) {
-      await writeReport(job, report);
-    }
-    return { exitCode: determineExitCode(job.policy, issues), report };
   }
 
   const ir0 = canonicalizeProject(imported.ir);
@@ -172,29 +181,19 @@ export async function runConvert(job: ConvertJob): Promise<ConvertResult> {
   const exportIssues = exportResult.issues;
 
   if (!exportResult.ok) {
-    const issues = aggregateIssues([
-      ...configIssues,
-      ...importIssues,
-      ...exportIssues,
-      ...(exportResult.fatalError ? [exportResult.fatalError] : []),
-    ]);
-    const report = buildReport({
-      job,
+    return failWithReport({
       detected,
+      contract: effectiveContract,
+      issues: [
+        ...configIssues,
+        ...importIssues,
+        ...exportIssues,
+        ...(exportResult.fatalError ? [exportResult.fatalError] : []),
+      ],
       ir0,
-      ir1: undefined,
-      issues,
-      addedElements: 0,
-      diffSummary: undefined,
-      trackMappings: [],
       parseWarnings: importWarnings,
       exportWarnings,
-      configWarnings,
     });
-    if (!job.flags.noReport) {
-      await writeReport(job, report);
-    }
-    return { exitCode: determineExitCode(job.policy, issues), report, ir0 };
   }
 
   let ir1: IRProject | undefined;
@@ -204,6 +203,8 @@ export async function runConvert(job: ConvertJob): Promise<ConvertResult> {
   let trackMappings: TrackMappingDiff[] = [];
   let reimportWarnings: string[] = [];
   let reimportIssues: Issue[] = [];
+  let fatalFailure = false;
+  let strictViolation = false;
 
   const reimported = await outputAdapter.import(job.outPath, {
     defaultPPQ: ir0.timing.ppq,
@@ -213,8 +214,7 @@ export async function runConvert(job: ConvertJob): Promise<ConvertResult> {
     ir1 = canonicalizeProject(reimported.ir);
     reimportWarnings = reimported.warnings;
     reimportIssues = reimported.issues;
-    const contractResult = getContract(detected, job.targetFormat, job.profile);
-    const diff = diffProjects(ir0, ir1, contractResult.contract);
+    const diff = diffProjects(ir0, ir1, effectiveContract);
     diffIssues = diff.issues;
     addedElements = diff.addedElements;
     diffSummary = diff.summary;
@@ -227,7 +227,17 @@ export async function runConvert(job: ConvertJob): Promise<ConvertResult> {
         message: `No specific contract for ${detected}->${job.targetFormat} (profile ${job.profile}); using generic rules.`,
       });
     }
+    if (job.policy === 'strict' && (diff.summary.dropped > 0 || diff.summary.errors > 0)) {
+      strictViolation = true;
+      diffIssues.push({
+        code: IssueCodes.CORE_STRICT_POLICY_VIOLATION,
+        severity: 'ERROR',
+        category: 'STRUCTURE',
+        message: `Strict policy violation: ${diff.summary.dropped} dropped, ${diff.summary.errors} errors.`,
+      });
+    }
   } else {
+    fatalFailure = true;
     const reason = reimported.fatalError?.message ?? 'unknown error';
     diffIssues.push({
       code: IssueCodes.DIFF_ROUNDTRIP_IMPORT_FAILED,
@@ -260,27 +270,38 @@ export async function runConvert(job: ConvertJob): Promise<ConvertResult> {
     parseWarnings: importWarnings,
     exportWarnings: [...exportWarnings, ...reimportWarnings],
     configWarnings,
+    contract: effectiveContract,
   });
 
   if (!job.flags.noReport) {
     await writeReport(job, report);
   }
 
-  const exitCode = determineExitCode(job.policy, allIssues);
+  const exitCode = determineExitCode({
+    policy: job.policy,
+    issues: allIssues,
+    fatalFailure,
+    strictViolation,
+  });
   return { exitCode, report, ir0, ir1 };
 }
 
-function determineExitCode(policy: ConvertJob['policy'], issues: Issue[]): number {
-  const hasError = issues.some((issue) => issue.severity === 'ERROR');
-  const hasWarn = issues.some((issue) => issue.severity === 'WARN');
-  const dropped = issues.some((issue) => issue.code === IssueCodes.DIFF_ELEMENT_DROPPED);
-  if (hasError) {
-    return policy === 'strict' ? 3 : 2;
+function determineExitCode(params: {
+  policy: ConvertJob['policy'];
+  issues: Issue[];
+  fatalFailure: boolean;
+  strictViolation: boolean;
+}): number {
+  if (params.fatalFailure) {
+    return 2;
   }
-  if (policy === 'strict' && dropped) {
+  if (params.policy === 'strict' && params.strictViolation) {
     return 3;
   }
-  if (hasWarn) {
+  const hasWarnOrError = params.issues.some(
+    (issue) => issue.severity === 'WARN' || issue.severity === 'ERROR',
+  );
+  if (hasWarnOrError) {
     return 1;
   }
   return 0;
@@ -303,6 +324,7 @@ async function writeReport(job: ConvertJob, report: ConversionReport): Promise<v
 function buildReport(params: {
   job: ConvertJob;
   detected: Format | 'unknown';
+  contract: MappingContract;
   ir0?: IRProject;
   ir1?: IRProject;
   issues: Issue[];
@@ -312,16 +334,8 @@ function buildReport(params: {
   parseWarnings: string[];
   exportWarnings: string[];
   configWarnings: string[];
-  contractOverride?: {
-    name: string;
-    version: string;
-    tolerances: { timingTicks: number; tempoBpm: number; velocity: number };
-  };
 }): ConversionReport {
-  const contract =
-    params.contractOverride ??
-    getContract(params.detected as Format, params.job.targetFormat, params.job.profile).contract;
-  const summary = params.diffSummary ?? summarizeIssues(params.issues);
+  const summary = params.diffSummary ?? EMPTY_DIFF_SUMMARY;
   const diagnostics = buildDiagnostics(
     params.parseWarnings,
     params.exportWarnings,
@@ -345,9 +359,9 @@ function buildReport(params: {
     },
     output: { path: params.job.outPath, format: params.job.targetFormat },
     contract: {
-      name: contract.name,
-      version: contract.version,
-      tolerances: contract.tolerances,
+      name: params.contract.name,
+      version: params.contract.version,
+      tolerances: params.contract.tolerances,
     },
     summary,
     stats: {
@@ -364,34 +378,6 @@ function buildReport(params: {
     issues: sortIssues(params.issues),
     diffs: { addedElements: params.addedElements },
     diagnostics,
-  };
-}
-
-function summarizeIssues(issues: Issue[]) {
-  const counts = issues.reduce(
-    (acc, issue) => {
-      const count = issue.count ?? 1;
-      if (issue.severity === 'ERROR') {
-        acc.errors += count;
-      }
-      if (issue.severity === 'WARN') {
-        acc.approximate += count;
-      }
-      if (issue.code === IssueCodes.DIFF_ELEMENT_DROPPED) {
-        acc.dropped += count;
-      }
-      return acc;
-    },
-    { approximate: 0, dropped: 0, errors: 0 },
-  );
-
-  return {
-    elementsTotal: counts.approximate + counts.dropped + counts.errors,
-    perfect: 0,
-    equivalent: 0,
-    approximate: counts.approximate,
-    dropped: counts.dropped,
-    errors: counts.errors,
   };
 }
 
@@ -446,4 +432,18 @@ function buildDiagnostics(
     diagnostics.configWarnings = configWarnings;
   }
   return Object.keys(diagnostics).length ? diagnostics : undefined;
+}
+
+function applyToleranceOverrides(
+  contract: MappingContract,
+  diffConfig: ConvertJob['config']['diff'],
+): MappingContract {
+  return {
+    ...contract,
+    tolerances: {
+      timingTicks: diffConfig.timingToleranceTicks ?? contract.tolerances.timingTicks,
+      tempoBpm: diffConfig.tempoToleranceBpm ?? contract.tolerances.tempoBpm,
+      velocity: diffConfig.velocityTolerance ?? contract.tolerances.velocity,
+    },
+  };
 }

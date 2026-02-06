@@ -1,0 +1,301 @@
+const reportSchema = {
+  $schema: 'https://json-schema.org/draft/2020-12/schema',
+  title: 'UMFT Conversion Report',
+  type: 'object',
+  required: [
+    'reportSchemaVersion',
+    'tool',
+    'run',
+    'input',
+    'output',
+    'contract',
+    'summary',
+    'stats',
+    'trackMappings',
+    'issues',
+  ],
+  properties: {
+    reportSchemaVersion: {
+      type: 'string',
+    },
+    tool: {
+      type: 'object',
+      required: ['name', 'version'],
+      properties: {
+        name: {
+          type: 'string',
+        },
+        version: {
+          type: 'string',
+        },
+        commit: {
+          type: 'string',
+        },
+      },
+    },
+    run: {
+      type: 'object',
+      required: ['timestampISO', 'policy', 'profile', 'configHash', 'platform'],
+      properties: {
+        timestampISO: {
+          type: 'string',
+        },
+        policy: {
+          enum: ['best-effort', 'strict'],
+        },
+        profile: {
+          type: 'string',
+        },
+        configHash: {
+          type: 'string',
+        },
+        platform: {
+          type: 'object',
+          required: ['node', 'os', 'arch'],
+          properties: {
+            node: {
+              type: 'string',
+            },
+            os: {
+              type: 'string',
+            },
+            arch: {
+              type: 'string',
+            },
+          },
+        },
+      },
+    },
+    input: {
+      type: 'object',
+      required: ['path', 'format', 'detectedBy'],
+      properties: {
+        path: {
+          type: 'string',
+        },
+        format: {
+          type: 'string',
+        },
+        detectedBy: {
+          enum: ['sniff', 'extension', 'user'],
+        },
+      },
+    },
+    output: {
+      type: 'object',
+      required: ['path', 'format'],
+      properties: {
+        path: {
+          type: 'string',
+        },
+        format: {
+          type: 'string',
+        },
+      },
+    },
+    contract: {
+      type: 'object',
+      required: ['name', 'version', 'tolerances'],
+      properties: {
+        name: {
+          type: 'string',
+        },
+        version: {
+          type: 'string',
+        },
+        tolerances: {
+          type: 'object',
+          required: ['timingTicks', 'tempoBpm', 'velocity'],
+          properties: {
+            timingTicks: {
+              type: 'number',
+            },
+            tempoBpm: {
+              type: 'number',
+            },
+            velocity: {
+              type: 'number',
+            },
+          },
+        },
+      },
+    },
+    summary: {
+      type: 'object',
+      required: ['elementsTotal', 'perfect', 'equivalent', 'approximate', 'dropped', 'errors'],
+      properties: {
+        elementsTotal: {
+          type: 'number',
+        },
+        perfect: {
+          type: 'number',
+        },
+        equivalent: {
+          type: 'number',
+        },
+        approximate: {
+          type: 'number',
+        },
+        dropped: {
+          type: 'number',
+        },
+        errors: {
+          type: 'number',
+        },
+      },
+    },
+    stats: {
+      type: 'object',
+      required: [
+        'tracksIn',
+        'tracksOut',
+        'notesIn',
+        'notesOut',
+        'tempoEventsIn',
+        'tempoEventsOut',
+        'markersIn',
+        'markersOut',
+      ],
+      properties: {
+        tracksIn: {
+          type: 'number',
+        },
+        tracksOut: {
+          type: 'number',
+        },
+        notesIn: {
+          type: 'number',
+        },
+        notesOut: {
+          type: 'number',
+        },
+        tempoEventsIn: {
+          type: 'number',
+        },
+        tempoEventsOut: {
+          type: 'number',
+        },
+        markersIn: {
+          type: 'number',
+        },
+        markersOut: {
+          type: 'number',
+        },
+      },
+    },
+    trackMappings: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          sourceTrackId: {
+            type: 'string',
+          },
+          sourceName: {
+            type: 'string',
+          },
+          targetPartId: {
+            type: 'string',
+          },
+          targetName: {
+            type: 'string',
+          },
+          stats: {
+            type: 'object',
+            properties: {
+              notes: {
+                type: 'number',
+              },
+              controllers: {
+                type: 'number',
+              },
+            },
+          },
+          fidelity: {
+            type: 'object',
+            properties: {
+              perfect: {
+                type: 'number',
+              },
+              approximate: {
+                type: 'number',
+              },
+              dropped: {
+                type: 'number',
+              },
+            },
+          },
+          elementIds: {
+            type: 'object',
+            properties: {
+              perfect: {
+                type: 'array',
+                items: {
+                  type: 'string',
+                },
+              },
+              equivalent: {
+                type: 'array',
+                items: {
+                  type: 'string',
+                },
+              },
+              approximate: {
+                type: 'array',
+                items: {
+                  type: 'string',
+                },
+              },
+              dropped: {
+                type: 'array',
+                items: {
+                  type: 'string',
+                },
+              },
+              errors: {
+                type: 'array',
+                items: {
+                  type: 'string',
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    issues: {
+      type: 'array',
+      items: {
+        type: 'object',
+      },
+    },
+    diffs: {
+      type: 'object',
+    },
+    diagnostics: {
+      type: 'object',
+      properties: {
+        parseWarnings: {
+          type: 'array',
+          items: {
+            type: 'string',
+          },
+        },
+        exportWarnings: {
+          type: 'array',
+          items: {
+            type: 'string',
+          },
+        },
+        configWarnings: {
+          type: 'array',
+          items: {
+            type: 'string',
+          },
+        },
+      },
+    },
+  },
+} as const;
+
+export default reportSchema;

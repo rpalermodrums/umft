@@ -226,7 +226,15 @@ function normalizeEvent(event: IREvent, trackId: string, trackStableId: string):
       const id = event.id || makeId('note', [trackId, tick, duration, event.pitch, event.velocity]);
       const stableId =
         event.stableId ||
-        makeId('note', [trackStableId, tick, duration, event.pitch, event.velocity]);
+        makeId('note', [
+          trackStableId,
+          tick,
+          duration,
+          event.pitch,
+          event.voice ?? '',
+          event.staff ?? '',
+          event.tie ?? '',
+        ]);
       return {
         ...event,
         id,

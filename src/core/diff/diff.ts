@@ -3,6 +3,7 @@ import {
   IRArticulationEvent,
   IRDynamicEvent,
   IREvent,
+  IRLyricEvent,
   IRMarker,
   IRNoteEvent,
   IRPitchBendEvent,
@@ -231,15 +232,18 @@ function diffEvents(
   let elementIds = cloneElementIds(EMPTY_ELEMENT_IDS);
 
   for (const kind of Object.keys(grouped0) as IREvent['kind'][]) {
-    const result = diffByIdThenContent(
-      kind,
-      grouped0[kind] ?? [],
-      grouped1[kind] ?? [],
-      eventContentKey,
-      (a, b) => compareEvent(kind, a, b, contract),
-      contract,
-      resolveEventId,
-    );
+    const result =
+      kind === 'note'
+        ? diffNotes(grouped0.note as IRNoteEvent[], grouped1.note as IRNoteEvent[], contract)
+        : diffByIdThenContent(
+            kind,
+            grouped0[kind] ?? [],
+            grouped1[kind] ?? [],
+            eventContentKey,
+            (a, b) => compareEvent(kind, a, b, contract),
+            contract,
+            resolveEventId,
+          );
 
     summary = mergeSummary(summary, result.summary);
     issues.push(...result.issues);
@@ -275,15 +279,15 @@ function resolveEventId(event: IREvent): string {
 }
 
 function tempoContentKey(event: IRTempoEvent): string {
-  return `tempo:${event.tick}:${event.bpm}`;
+  return `tempo:${event.tick}`;
 }
 
 function timeSignatureContentKey(event: IRTimeSignature): string {
-  return `timesig:${event.tick}:${event.numerator}:${event.denominator}`;
+  return `timesig:${event.tick}`;
 }
 
 function markerContentKey(marker: IRMarker): string {
-  return `marker:${marker.tick}:${marker.name}`;
+  return `marker:${marker.tick}`;
 }
 
 function groupByKind(events: IREvent[]): Record<IREvent['kind'], IREvent[]> {
@@ -303,6 +307,141 @@ function groupByKind(events: IREvent[]): Record<IREvent['kind'], IREvent[]> {
       dynamic: [],
     } as Record<IREvent['kind'], IREvent[]>,
   );
+}
+
+function diffNotes(
+  left: IRNoteEvent[],
+  right: IRNoteEvent[],
+  contract: MappingContract,
+): CollectionDiffResult {
+  const expectation = getExpectation(contract, 'note');
+  let summary = { ...EMPTY_SUMMARY };
+  const issues: Issue[] = [];
+  let added = 0;
+  const elementIds = cloneElementIds(EMPTY_ELEMENT_IDS);
+
+  const stablePairs = pairByKey(left, right, (note) =>
+    note.stableId && note.stableId.length ? note.stableId : undefined,
+  );
+  for (const pair of stablePairs.pairs) {
+    summary.elementsTotal += 1;
+    const comparison = compareNote(pair.left, pair.right, contract);
+    summary = applyClass(summary, comparison.className);
+    issues.push(...comparison.issues);
+    addElementId(elementIds, comparison.className, resolveEventId(pair.left));
+  }
+
+  const idPairs = pairByKey(stablePairs.leftRemaining, stablePairs.rightRemaining, (note) =>
+    note.id && note.id.length ? note.id : undefined,
+  );
+  for (const pair of idPairs.pairs) {
+    summary.elementsTotal += 1;
+    const comparison = compareNote(pair.left, pair.right, contract);
+    summary = applyClass(summary, comparison.className);
+    issues.push(...comparison.issues);
+    addElementId(elementIds, comparison.className, resolveEventId(pair.left));
+  }
+
+  const leftBuckets = groupNotesByBucket(idPairs.leftRemaining);
+  const rightBuckets = groupNotesByBucket(idPairs.rightRemaining);
+  const keys = new Set([...leftBuckets.keys(), ...rightBuckets.keys()]);
+
+  for (const key of [...keys].sort()) {
+    const leftBucket = [...(leftBuckets.get(key) ?? [])].sort(compareNotesForPairing);
+    const rightBucket = [...(rightBuckets.get(key) ?? [])].sort(compareNotesForPairing);
+    const pairCount = Math.min(leftBucket.length, rightBucket.length);
+
+    for (let index = 0; index < pairCount; index += 1) {
+      const leftNote = leftBucket[index];
+      const rightNote = rightBucket[index];
+      summary.elementsTotal += 1;
+      const comparison = compareNote(leftNote, rightNote, contract);
+      summary = applyClass(summary, comparison.className);
+      issues.push(...comparison.issues);
+      addElementId(elementIds, comparison.className, resolveEventId(leftNote));
+    }
+
+    for (let index = pairCount; index < leftBucket.length; index += 1) {
+      const leftNote = leftBucket[index];
+      summary.elementsTotal += 1;
+      const dropped = classifyDrop(expectation, 'note');
+      summary = applyClass(summary, dropped.className);
+      issues.push(...dropped.issues);
+      addElementId(elementIds, dropped.className, resolveEventId(leftNote));
+    }
+
+    if (rightBucket.length > pairCount) {
+      added += rightBucket.length - pairCount;
+    }
+  }
+
+  return { summary, issues, added, elementIds };
+}
+
+function groupNotesByBucket(notes: IRNoteEvent[]): Map<string, IRNoteEvent[]> {
+  const buckets = new Map<string, IRNoteEvent[]>();
+  for (const note of notes) {
+    const key = `${note.pitch}|${note.voice ?? ''}|${note.staff ?? ''}`;
+    const list = buckets.get(key) ?? [];
+    list.push(note);
+    buckets.set(key, list);
+  }
+  return buckets;
+}
+
+function compareNotesForPairing(a: IRNoteEvent, b: IRNoteEvent): number {
+  return (
+    compareNumbers(a.tick, b.tick) ||
+    compareNumbers(a.duration, b.duration) ||
+    compareNumbers(a.velocity, b.velocity) ||
+    compareStrings(a.stableId, b.stableId) ||
+    compareStrings(a.id, b.id)
+  );
+}
+
+function pairByKey<T>(
+  left: T[],
+  right: T[],
+  keyFn: (item: T) => string | undefined,
+): { pairs: Array<{ left: T; right: T }>; leftRemaining: T[]; rightRemaining: T[] } {
+  const rightBuckets = new Map<string, number[]>();
+  right.forEach((item, index) => {
+    const key = keyFn(item);
+    if (!key) return;
+    const list = rightBuckets.get(key) ?? [];
+    list.push(index);
+    rightBuckets.set(key, list);
+  });
+
+  const usedRight = new Set<number>();
+  const pairs: Array<{ left: T; right: T }> = [];
+  const leftRemaining: T[] = [];
+
+  for (const leftItem of left) {
+    const key = keyFn(leftItem);
+    if (!key) {
+      leftRemaining.push(leftItem);
+      continue;
+    }
+    const candidates = rightBuckets.get(key);
+    if (!candidates?.length) {
+      leftRemaining.push(leftItem);
+      continue;
+    }
+    while (candidates.length && usedRight.has(candidates[0])) {
+      candidates.shift();
+    }
+    const rightIndex = candidates.shift();
+    if (rightIndex === undefined) {
+      leftRemaining.push(leftItem);
+      continue;
+    }
+    usedRight.add(rightIndex);
+    pairs.push({ left: leftItem, right: right[rightIndex] });
+  }
+
+  const rightRemaining = right.filter((_, index) => !usedRight.has(index));
+  return { pairs, leftRemaining, rightRemaining };
 }
 
 function diffById<T>(
@@ -693,7 +832,7 @@ function compareEvent(
     case 'text':
       return compareText(a as IRTextEvent, b as IRTextEvent, contract);
     case 'lyric':
-      return compareLyric(a as IRTextEvent, b as IRTextEvent, contract);
+      return compareLyric(a as IRLyricEvent, b as IRLyricEvent, contract);
     case 'articulation':
       return compareArticulation(a as IRArticulationEvent, b as IRArticulationEvent, contract);
     case 'dynamic':
@@ -828,7 +967,7 @@ function compareText(a: IRTextEvent, b: IRTextEvent, contract: MappingContract):
   return classifyComparison(issues, getExpectation(contract, 'text'));
 }
 
-function compareLyric(a: IRTextEvent, b: IRTextEvent, contract: MappingContract): CompareResult {
+function compareLyric(a: IRLyricEvent, b: IRLyricEvent, contract: MappingContract): CompareResult {
   const issues: Issue[] = [];
   const tickDelta = Math.abs(a.tick - b.tick);
   if (tickDelta > contract.tolerances.timingTicks || a.text !== b.text) {
@@ -957,4 +1096,17 @@ function applyClass(summary: DiffSummary, className: FidelityClass): DiffSummary
       summary.approximate += 1;
   }
   return summary;
+}
+
+function compareNumbers(a: number, b: number): number {
+  return a === b ? 0 : a < b ? -1 : 1;
+}
+
+function compareStrings(a?: string | null, b?: string | null): number {
+  const left = a ?? '';
+  const right = b ?? '';
+  if (left === right) {
+    return 0;
+  }
+  return left < right ? -1 : 1;
 }
