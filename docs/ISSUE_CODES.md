@@ -158,6 +158,11 @@ This catalog is **normative** for the codes currently implemented in the codebas
   - Trigger: Note-on without matching note-off.
   - Message: Missing note-off; note closed at end of track: pitch={pitch}, ch={channel}.
 
+- `MIDI_SYSTEM_EVENT_SKIPPED`
+  - Severity: WARN | Category: STRUCTURE
+  - Trigger: Unsupported MIDI system/sysex event skipped.
+  - Message: Unsupported MIDI system event skipped: {statusByteHex}.
+
 ## MXML\_\*
 
 - `MXML_PARSE_FAILED`
@@ -199,3 +204,13 @@ This catalog is **normative** for the codes currently implemented in the codebas
   - Severity: WARN | Category: TIMING
   - Trigger: Tick-to-duration rounding above threshold.
   - Message: Duration rounded during import/export: {count} notes affected.
+
+- `MXML_UNSUPPORTED_IMPORT_CONSTRUCT`
+  - Severity: WARN | Category: STRUCTURE
+  - Trigger: MusicXML import sees unsupported construct and drops it.
+  - Message: Unsupported MusicXML construct dropped during import: {construct}.
+
+- `MXML_UNSUPPORTED_EXPORT_EVENT`
+  - Severity: WARN | Category: STRUCTURE
+  - Trigger: IR event kind has no MusicXML mapping and is dropped on export.
+  - Message: Unsupported MusicXML export event dropped: {eventKind}.

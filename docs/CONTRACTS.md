@@ -17,6 +17,16 @@ Expectations:
 - `approximate`: expected approximation
 - `unsupported`: expected to drop
 
+## Effective Tolerances
+
+At runtime, contract tolerances can be overridden by config:
+
+- `diff.timingToleranceTicks` -> `contract.tolerances.timingTicks`
+- `diff.tempoToleranceBpm` -> `contract.tolerances.tempoBpm`
+- `diff.velocityTolerance` -> `contract.tolerances.velocity`
+
+Reports always emit the effective tolerance values used for diffing.
+
 ## Contracts
 
 ### midi->midi@1.0

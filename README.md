@@ -29,6 +29,29 @@ This repo uses **bun** for dependencies and scripts.
 bun install
 ```
 
+## First 60 Seconds
+
+```bash
+bun run build
+node dist/cli.js convert test/fixtures/simple.mid --to musicxml --out /tmp/simple.musicxml
+node dist/cli.js inspect /tmp/simple.musicxml
+node dist/cli.js validate /tmp/simple.musicxml
+```
+
+Strict mode example:
+
+```bash
+node dist/cli.js convert test/fixtures/simple.mid --to musicxml --policy strict --out /tmp/simple-strict.musicxml
+echo $?   # 3 when strict fidelity is violated (dropped/error elements)
+```
+
+Fatal failure example:
+
+```bash
+node dist/cli.js convert /tmp/missing.mid --to midi
+echo $?   # 2 for fatal input/import/export/write failures
+```
+
 ## CLI Usage
 
 ```bash
@@ -55,6 +78,8 @@ node dist/cli.js schema report
 - `1`: success with WARN issues
 - `2`: fatal failure (parse/write/unsupported pair)
 - `3`: strict policy violation
+
+Precedence is deterministic: fatal failures return `2` even if strict mode is set; strict fidelity violations return `3` only for non-fatal completed round-trip diffs.
 
 ## Configuration
 
