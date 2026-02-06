@@ -95,7 +95,8 @@ export const midiAdapter: FormatAdapter = {
     }
   },
   async export(ir: IRProject, path: string, opts: ExportOptions): Promise<ExportResult> {
-    const data = writeMidi(ir);
+    const exportType = opts.config?.midi.exportType ?? 1;
+    const data = writeMidi(ir, exportType);
     if (!opts.overwrite) {
       try {
         await fs.access(path);
@@ -267,6 +268,36 @@ function parseMidi(buffer: Buffer, opts: ImportOptions): MidiParseResult {
         continue;
       }
 
+      if (statusByte === 0xf0 || statusByte === 0xf7) {
+        const length = readVarLen(buffer, offset);
+        offset = length.next + length.value;
+        runningStatus = null;
+        const hex = `0x${statusByte.toString(16).padStart(2, '0')}`;
+        warnings.push(`Unsupported MIDI system event skipped: ${hex}.`);
+        issues.push({
+          code: IssueCodes.MIDI_SYSTEM_EVENT_SKIPPED,
+          severity: 'WARN',
+          category: 'STRUCTURE',
+          message: `Unsupported MIDI system event skipped: ${hex}.`,
+        });
+        continue;
+      }
+
+      if (statusByte >= 0xf0) {
+        const dataLen = systemEventDataLength(statusByte);
+        offset += dataLen;
+        runningStatus = null;
+        const hex = `0x${statusByte.toString(16).padStart(2, '0')}`;
+        warnings.push(`Unsupported MIDI system event skipped: ${hex}.`);
+        issues.push({
+          code: IssueCodes.MIDI_SYSTEM_EVENT_SKIPPED,
+          severity: 'WARN',
+          category: 'STRUCTURE',
+          message: `Unsupported MIDI system event skipped: ${hex}.`,
+        });
+        continue;
+      }
+
       const eventType = statusByte & 0xf0;
       const eventChannel = statusByte & 0x0f;
       channel = channel ?? eventChannel;
@@ -348,13 +379,43 @@ function parseMidi(buffer: Buffer, opts: ImportOptions): MidiParseResult {
       }
     }
 
+    for (let channelIndex = 0; channelIndex < noteStacks.length; channelIndex += 1) {
+      for (let pitch = 0; pitch < noteStacks[channelIndex].length; pitch += 1) {
+        const openNotes = noteStacks[channelIndex][pitch];
+        while (openNotes.length > 0) {
+          const note = openNotes.pop() as { tick: number; velocity: number };
+          events.push({
+            kind: 'note',
+            id: '',
+            tick: note.tick,
+            duration: Math.max(1, tick - note.tick),
+            pitch,
+            velocity: note.velocity,
+          });
+          warnings.push(
+            `Missing note-off for pitch ${pitch} ch ${channelIndex}; closed at track end.`,
+          );
+          issues.push({
+            code: IssueCodes.MIDI_NOTE_OFF_MISSING,
+            severity: 'WARN',
+            category: 'TIMING',
+            message: `Missing note-off; note closed at end of track: pitch=${pitch}, ch=${channelIndex}.`,
+          });
+        }
+      }
+    }
+
+    if (events.length === 0 && channel === undefined && program === undefined) {
+      continue;
+    }
+
     tracks.push({ name, channel, program, events });
   }
 
   return { timing, tracks, markers, warnings, issues };
 }
 
-function writeMidi(ir: IRProject): Buffer {
+function writeMidi(ir: IRProject, exportType: 0 | 1): Buffer {
   const ppq = ir.timing.ppq;
   const tracks: Buffer[] = [];
 
@@ -375,82 +436,103 @@ function writeMidi(ir: IRProject): Buffer {
     metaEvents.push({ tick: marker.tick, type: 'marker', data: marker.name });
   }
 
-  tracks.push(writeTrack(metaEvents));
-
-  for (const track of ir.tracks) {
-    const events: MidiEvent[] = [];
-    events.push({ tick: 0, type: 'trackName', data: track.name });
-    if (track.midi?.program !== undefined) {
-      events.push({
-        tick: 0,
-        type: 'program',
-        data: { channel: track.midi.channel ?? 0, program: track.midi.program },
-      });
-    }
-    for (const event of track.events) {
-      switch (event.kind) {
-        case 'note':
-          events.push({
-            tick: event.tick,
-            type: 'noteOn',
-            data: {
-              channel: track.midi?.channel ?? 0,
-              pitch: event.pitch,
-              velocity: event.velocity,
-            },
-          });
-          events.push({
-            tick: event.tick + event.duration,
-            type: 'noteOff',
-            data: {
-              channel: track.midi?.channel ?? 0,
-              pitch: event.pitch,
-              velocity: event.offVelocity ?? 0,
-            },
-          });
-          break;
-        case 'cc':
-          events.push({
-            tick: event.tick,
-            type: 'cc',
-            data: {
-              channel: track.midi?.channel ?? 0,
-              controller: event.controller,
-              value: event.value,
-            },
-          });
-          break;
-        case 'pitchbend':
-          events.push({
-            tick: event.tick,
-            type: 'pitchbend',
-            data: {
-              channel: track.midi?.channel ?? 0,
-              value: event.value,
-            },
-          });
-          break;
-        case 'text':
-          events.push({ tick: event.tick, type: 'text', data: event.text });
-          break;
-        case 'lyric':
-          events.push({ tick: event.tick, type: 'text', data: event.text });
-          break;
-        default:
-          break;
+  if (exportType === 0) {
+    const merged: MidiEvent[] = [...metaEvents];
+    ir.tracks.forEach((track, index) => {
+      merged.push(...toTrackMidiEvents(track, index));
+    });
+    tracks.push(writeTrack(merged));
+  } else {
+    tracks.push(writeTrack(metaEvents));
+    ir.tracks.forEach((track, index) => {
+      const body = toTrackMidiEvents(track, index);
+      if (body.length === 0) {
+        return;
       }
-    }
-    tracks.push(writeTrack(events));
+      tracks.push(writeTrack([{ tick: 0, type: 'trackName', data: track.name }, ...body]));
+    });
   }
 
   const header = Buffer.alloc(14);
   MIDI_HEADER.copy(header, 0);
   header.writeUInt32BE(6, 4);
-  header.writeUInt16BE(tracks.length > 1 ? 1 : 0, 8);
+  header.writeUInt16BE(exportType === 0 ? 0 : tracks.length > 1 ? 1 : 0, 8);
   header.writeUInt16BE(tracks.length, 10);
   header.writeUInt16BE(ppq, 12);
 
   return Buffer.concat([header, ...tracks]);
+}
+
+function toTrackMidiEvents(
+  track: IRProject['tracks'][number],
+  fallbackChannel: number,
+): MidiEvent[] {
+  const channel = track.midi?.channel ?? fallbackChannel % 16;
+  const events: MidiEvent[] = [];
+
+  if (track.midi?.program !== undefined) {
+    events.push({
+      tick: 0,
+      type: 'program',
+      data: { channel, program: track.midi.program },
+    });
+  }
+
+  for (const event of track.events) {
+    switch (event.kind) {
+      case 'note':
+        events.push({
+          tick: event.tick,
+          type: 'noteOn',
+          data: {
+            channel,
+            pitch: event.pitch,
+            velocity: event.velocity,
+          },
+        });
+        events.push({
+          tick: event.tick + event.duration,
+          type: 'noteOff',
+          data: {
+            channel,
+            pitch: event.pitch,
+            velocity: event.offVelocity ?? 0,
+          },
+        });
+        break;
+      case 'cc':
+        events.push({
+          tick: event.tick,
+          type: 'cc',
+          data: {
+            channel,
+            controller: event.controller,
+            value: event.value,
+          },
+        });
+        break;
+      case 'pitchbend':
+        events.push({
+          tick: event.tick,
+          type: 'pitchbend',
+          data: {
+            channel,
+            value: event.value,
+          },
+        });
+        break;
+      case 'text':
+        events.push({ tick: event.tick, type: 'text', data: event.text });
+        break;
+      case 'lyric':
+        events.push({ tick: event.tick, type: 'text', data: event.text });
+        break;
+      default:
+        break;
+    }
+  }
+
+  return events;
 }
 
 type MidiEvent =
@@ -603,6 +685,27 @@ function readVarLen(buffer: Buffer, start: number): { value: number; next: numbe
     }
   }
   return { value, next: offset };
+}
+
+function systemEventDataLength(statusByte: number): number {
+  switch (statusByte) {
+    case 0xf1:
+    case 0xf3:
+      return 1;
+    case 0xf2:
+      return 2;
+    case 0xf6:
+    case 0xf8:
+    case 0xf9:
+    case 0xfa:
+    case 0xfb:
+    case 0xfc:
+    case 0xfd:
+    case 0xfe:
+      return 0;
+    default:
+      return 0;
+  }
 }
 
 function writeVarLen(value: number): Buffer {

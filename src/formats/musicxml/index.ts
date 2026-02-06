@@ -22,6 +22,13 @@ const parser = new XMLParser({
   textNodeName: 'text',
 });
 
+const orderedParser = new XMLParser({
+  ignoreAttributes: false,
+  attributeNamePrefix: '',
+  textNodeName: 'text',
+  preserveOrder: true,
+});
+
 const builder = new XMLBuilder({
   ignoreAttributes: false,
   attributeNamePrefix: '',
@@ -107,6 +114,24 @@ export const musicxmlAdapter: FormatAdapter = {
   async export(ir: IRProject, path: string, opts: ExportOptions): Promise<ExportResult> {
     const config = opts.config ?? DEFAULT_CONFIG;
     const result = buildMusicXml(ir, config);
+    if (!opts.overwrite) {
+      try {
+        await fs.access(path);
+        return {
+          ok: false,
+          warnings: result.warnings,
+          issues: result.issues,
+          fatalError: {
+            code: IssueCodes.CORE_OUTPUT_PATH_EXISTS,
+            severity: 'ERROR',
+            category: 'STRUCTURE',
+            message: `Output already exists: ${path}. Use --overwrite to replace.`,
+          },
+        };
+      } catch {
+        // path does not exist
+      }
+    }
     try {
       await ensureDirForFile(path);
       await atomicWriteFile(path, result.xml);
@@ -144,14 +169,18 @@ interface MusicXmlParseResult {
   issues: ImportResult['issues'];
 }
 
+type OrderedNode = Record<string, unknown> & { ':@'?: Record<string, unknown> };
+
 function parseMusicXml(content: string, path: string, ppq = 960): MusicXmlParseResult {
   const warnings: string[] = [];
   const issues: ImportResult['issues'] = [];
   void path;
 
   let parsed: Record<string, unknown>;
+  let ordered: OrderedNode[];
   try {
     parsed = parser.parse(content) as Record<string, unknown>;
+    ordered = orderedParser.parse(content) as OrderedNode[];
   } catch (error) {
     throw new MusicXmlParseError({
       code: IssueCodes.MXML_PARSE_FAILED,
@@ -168,6 +197,16 @@ function parseMusicXml(content: string, path: string, ppq = 960): MusicXmlParseR
       severity: 'ERROR',
       category: 'STRUCTURE',
       message: 'MusicXML parse failed: missing <score-partwise> root.',
+    });
+  }
+
+  const orderedRoot = ordered.find((node) => orderedNodeName(node) === 'score-partwise');
+  if (!orderedRoot) {
+    throw new MusicXmlParseError({
+      code: IssueCodes.MXML_PARSE_FAILED,
+      severity: 'ERROR',
+      category: 'STRUCTURE',
+      message: 'MusicXML parse failed: missing ordered <score-partwise> root.',
     });
   }
 
@@ -192,76 +231,158 @@ function parseMusicXml(content: string, path: string, ppq = 960): MusicXmlParseR
   };
   const markers: IRMarker[] = [];
   const tracks: ParsedPart[] = [];
+  const unsupportedConstructs = new Map<string, number>();
 
-  const parts = normalizeArray(scoreRecord.part);
-  for (const part of parts) {
-    const partRecord = asRecord(part);
-    const partId = (partRecord.id ?? partRecord['@_id'] ?? partRecord['@id']) as string | undefined;
-    const name = partNames.get(partId ?? '') ?? `Part ${partId ?? tracks.length + 1}`;
+  const partNodes = orderedNodeChildren(orderedRoot).filter(
+    (node) => orderedNodeName(node) === 'part',
+  );
+  for (const partNode of partNodes) {
+    const partIdAttr = orderedNodeAttribute(partNode, 'id');
+    const partId = typeof partIdAttr === 'string' ? partIdAttr : String(tracks.length + 1);
+    const name = partNames.get(partId) ?? `Part ${partId}`;
     const events: ParsedPart['events'] = [];
 
     let divisions = 1;
-    let tick = 0;
-    const measures = normalizeArray(partRecord.measure);
-    for (const measure of measures) {
-      const measureRecord = asRecord(measure);
-      const attributes = asRecord(measureRecord.attributes);
-      if (attributes.divisions) {
-        const parsedDiv = Number(attributes.divisions);
-        if (Number.isFinite(parsedDiv) && parsedDiv > 0) {
-          divisions = parsedDiv;
-        }
-      }
-      if (attributes.time) {
-        const time = asRecord(attributes.time);
-        const numerator = Number(time.beats ?? time['beats'] ?? 4);
-        const denominator = Number(time['beat-type'] ?? time['beat-type'] ?? 4) as
-          | 1
-          | 2
-          | 4
-          | 8
-          | 16
-          | 32;
-        if (Number.isFinite(numerator) && Number.isFinite(denominator)) {
-          timing.timeSignatures.push({ id: '', tick, numerator, denominator });
-        }
-      }
+    let partTick = 0;
+    let currentTimeSig: { numerator: number; denominator: 1 | 2 | 4 | 8 | 16 | 32 } = {
+      numerator: 4,
+      denominator: 4,
+    };
 
-      const directions = normalizeArray(measureRecord.direction);
-      for (const direction of directions) {
-        const sound = asRecord(asRecord(direction).sound);
-        const tempo = Number(sound.tempo ?? sound['@tempo']);
-        if (Number.isFinite(tempo) && tempo > 0) {
-          timing.tempoMap.push({ id: '', tick, bpm: tempo });
-        }
-      }
+    const measureNodes = orderedNodeChildren(partNode).filter(
+      (node) => orderedNodeName(node) === 'measure',
+    );
+    for (const measureNode of measureNodes) {
+      const measureStart = partTick;
+      let cursorTick = measureStart;
+      let chordAnchorTick: number | undefined;
+      let activeTimeSig = currentTimeSig;
 
-      const notes = normalizeArray(measureRecord.note);
-      for (const note of notes) {
-        const noteRecord = asRecord(note);
-        const duration = Number(noteRecord.duration ?? 0);
-        const isRest = Object.prototype.hasOwnProperty.call(noteRecord, 'rest');
-        const ticks = Math.max(1, Math.round((duration * ppq) / divisions));
+      for (const element of orderedNodeChildren(measureNode)) {
+        const elementName = orderedNodeName(element);
+        if (!elementName) {
+          continue;
+        }
+
+        if (elementName === 'attributes') {
+          const divisionsValue = orderedChildNumber(element, 'divisions');
+          if (divisionsValue !== undefined && divisionsValue > 0) {
+            divisions = divisionsValue;
+          }
+          const timeNode = orderedFirstChild(element, 'time');
+          if (timeNode) {
+            const numeratorValue = orderedChildNumber(timeNode, 'beats') ?? 4;
+            const denominatorValue = orderedChildNumber(timeNode, 'beat-type') ?? 4;
+            const numerator = Math.max(1, Math.round(numeratorValue));
+            const denominator = toSupportedDenominator(denominatorValue);
+            activeTimeSig = { numerator, denominator };
+            currentTimeSig = activeTimeSig;
+            timing.timeSignatures.push({
+              id: '',
+              tick: measureStart,
+              numerator,
+              denominator,
+            });
+          }
+          continue;
+        }
+
+        if (elementName === 'direction') {
+          const soundNode = orderedFirstChild(element, 'sound');
+          const tempo = soundNode
+            ? (orderedAttributeNumber(soundNode, 'tempo') ?? orderedChildNumber(soundNode, 'tempo'))
+            : undefined;
+          if (tempo !== undefined && tempo > 0) {
+            timing.tempoMap.push({ id: '', tick: cursorTick, bpm: tempo });
+          }
+          continue;
+        }
+
+        if (elementName === 'backup' || elementName === 'forward') {
+          const durationDivisions = orderedChildNumber(element, 'duration') ?? 0;
+          const ticks = divisionsDurationToTicks(durationDivisions, ppq, divisions);
+          if (elementName === 'backup') {
+            cursorTick = Math.max(measureStart, cursorTick - ticks);
+          } else {
+            cursorTick += ticks;
+          }
+          chordAnchorTick = undefined;
+          continue;
+        }
+
+        if (elementName !== 'note') {
+          continue;
+        }
+
+        const isRest = orderedHasChild(element, 'rest');
+        const isChord = orderedHasChild(element, 'chord');
+        const durationDivisions = orderedChildNumber(element, 'duration') ?? 0;
+        const durationTicks = divisionsDurationToTicks(durationDivisions, ppq, divisions);
+        const noteTick = isChord ? (chordAnchorTick ?? cursorTick) : cursorTick;
+
         if (!isRest) {
-          const pitch = asRecord(noteRecord.pitch);
-          const step = pitch.step as string | undefined;
-          const alter = Number(pitch.alter ?? 0);
-          const octave = Number(pitch.octave ?? 4);
-          const midiPitch = toMidiPitch(step ?? 'C', alter, octave);
+          const pitchNode = orderedFirstChild(element, 'pitch');
+          const step = (pitchNode && orderedChildText(pitchNode, 'step')) || 'C';
+          const alter = Number((pitchNode && orderedChildText(pitchNode, 'alter')) ?? 0);
+          const octave = Number((pitchNode && orderedChildText(pitchNode, 'octave')) ?? 4);
+          const midiPitch = toMidiPitch(step, alter, octave);
           events.push({
             kind: 'note',
             id: '',
-            tick,
-            duration: ticks,
+            tick: noteTick,
+            duration: durationTicks,
             pitch: midiPitch,
             velocity: 64,
           });
         }
-        tick += ticks;
+
+        if (orderedHasChild(element, 'lyric')) {
+          incrementMapCount(unsupportedConstructs, 'note.lyric');
+        }
+        const notationsNode = orderedFirstChild(element, 'notations');
+        if (notationsNode) {
+          if (orderedHasChild(notationsNode, 'articulations')) {
+            incrementMapCount(unsupportedConstructs, 'note.notations.articulations');
+          }
+          if (orderedHasChild(notationsNode, 'dynamics')) {
+            incrementMapCount(unsupportedConstructs, 'note.notations.dynamics');
+          }
+          if (orderedHasChild(notationsNode, 'ornaments')) {
+            incrementMapCount(unsupportedConstructs, 'note.notations.ornaments');
+          }
+          if (
+            !orderedHasChild(notationsNode, 'articulations') &&
+            !orderedHasChild(notationsNode, 'dynamics') &&
+            !orderedHasChild(notationsNode, 'ornaments')
+          ) {
+            incrementMapCount(unsupportedConstructs, 'note.notations');
+          }
+        }
+
+        if (!isChord) {
+          cursorTick += durationTicks;
+          chordAnchorTick = noteTick;
+        }
       }
+
+      const measureLength =
+        ((ppq * 4) / activeTimeSig.denominator) * Math.max(1, activeTimeSig.numerator);
+      partTick = Math.max(cursorTick, measureStart + Math.max(1, Math.round(measureLength)));
     }
 
-    tracks.push({ partId: String(partId ?? tracks.length + 1), name, events });
+    tracks.push({ partId, name, events });
+  }
+
+  for (const [construct, count] of [...unsupportedConstructs.entries()].sort((a, b) =>
+    a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0,
+  )) {
+    issues.push({
+      code: IssueCodes.MXML_UNSUPPORTED_IMPORT_CONSTRUCT,
+      severity: 'WARN',
+      category: 'STRUCTURE',
+      message: `Unsupported MusicXML construct dropped during import: ${construct}.`,
+      count,
+    });
   }
 
   return { timing, tracks, markers, warnings, issues };
@@ -562,6 +683,7 @@ function buildMusicXml(
     unrepresentableTied: 0,
     durationRounded: 0,
   };
+  const unsupportedExportEvents = new Map<string, number>();
 
   const defaultTimeSig: IRTimeSignature = { id: '', tick: 0, numerator: 4, denominator: 4 };
   const timeSignatures = ir.timing.timeSignatures.length
@@ -595,7 +717,13 @@ function buildMusicXml(
 
   const parts = ir.tracks.map((track, index) => {
     const partId = track.notation?.partId ?? `P${index + 1}`;
-    const notes = track.events.filter((event) => event.kind === 'note');
+    const notes = track.events.flatMap((event) => {
+      if (event.kind === 'note') {
+        return [event];
+      }
+      incrementMapCount(unsupportedExportEvents, `event.${event.kind}`);
+      return [];
+    });
     const measuresXml = buildPartMeasures(
       notes,
       measures,
@@ -652,6 +780,18 @@ function buildMusicXml(
       category: 'TIMING',
       message: `Duration rounded during import/export: ${counters.durationRounded} notes affected.`,
       count: counters.durationRounded,
+    });
+  }
+
+  for (const [eventKind, count] of [...unsupportedExportEvents.entries()].sort((a, b) =>
+    a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0,
+  )) {
+    issues.push({
+      code: IssueCodes.MXML_UNSUPPORTED_EXPORT_EVENT,
+      severity: 'WARN',
+      category: 'STRUCTURE',
+      message: `Unsupported MusicXML export event dropped: ${eventKind}.`,
+      count,
     });
   }
 
@@ -1089,6 +1229,88 @@ function asRecord(value: unknown): Record<string, unknown> {
     return value as Record<string, unknown>;
   }
   return {};
+}
+
+function orderedNodeName(node: OrderedNode): string | undefined {
+  return Object.keys(node).find((key) => key !== ':@');
+}
+
+function orderedNodeChildren(node: OrderedNode): OrderedNode[] {
+  const name = orderedNodeName(node);
+  if (!name) {
+    return [];
+  }
+  const value = node[name];
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value as OrderedNode[];
+}
+
+function orderedNodeAttribute(node: OrderedNode, key: string): unknown {
+  return node[':@']?.[key];
+}
+
+function orderedFirstChild(node: OrderedNode, name: string): OrderedNode | undefined {
+  return orderedNodeChildren(node).find((child) => orderedNodeName(child) === name);
+}
+
+function orderedChildText(node: OrderedNode, name: string): string | undefined {
+  const child = orderedFirstChild(node, name);
+  if (!child) {
+    return undefined;
+  }
+  const textNode = orderedNodeChildren(child).find((entry) =>
+    Object.prototype.hasOwnProperty.call(entry, 'text'),
+  );
+  const value = textNode?.text;
+  if (typeof value === 'string' || typeof value === 'number') {
+    return String(value);
+  }
+  return undefined;
+}
+
+function orderedChildNumber(node: OrderedNode, name: string): number | undefined {
+  const value = orderedChildText(node, name);
+  if (value === undefined) {
+    return undefined;
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function orderedAttributeNumber(node: OrderedNode, key: string): number | undefined {
+  const value = orderedNodeAttribute(node, key);
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function orderedHasChild(node: OrderedNode, name: string): boolean {
+  return orderedNodeChildren(node).some((child) => orderedNodeName(child) === name);
+}
+
+function toSupportedDenominator(value: number): 1 | 2 | 4 | 8 | 16 | 32 {
+  const candidates: Array<1 | 2 | 4 | 8 | 16 | 32> = [1, 2, 4, 8, 16, 32];
+  const rounded = Math.max(1, Math.round(value));
+  if (candidates.includes(rounded as 1 | 2 | 4 | 8 | 16 | 32)) {
+    return rounded as 1 | 2 | 4 | 8 | 16 | 32;
+  }
+  return 4;
+}
+
+function divisionsDurationToTicks(
+  durationDivisions: number,
+  ppq: number,
+  divisions: number,
+): number {
+  if (!Number.isFinite(durationDivisions) || durationDivisions <= 0 || divisions <= 0) {
+    return 1;
+  }
+  return Math.max(1, Math.round((durationDivisions * ppq) / divisions));
+}
+
+function incrementMapCount(map: Map<string, number>, key: string): void {
+  map.set(key, (map.get(key) ?? 0) + 1);
 }
 
 function splitNotesAcrossMeasures(

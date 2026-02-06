@@ -74,7 +74,7 @@ describe('golden convert', () => {
     };
 
     const result = await runConvert(job);
-    assert.equal(result.exitCode, 0);
+    assert.equal(result.exitCode, 1);
 
     const actual = await readFile(outPath, 'utf8');
     const expected = await readFile(join('test', 'golden', 'simple.musicxml'), 'utf8');
@@ -84,6 +84,7 @@ describe('golden convert', () => {
     assert.equal(report.input.format, 'midi');
     assert.equal(report.output.format, 'musicxml');
     assert.equal(report.summary.errors, 0);
+    assert.ok(report.issues.some((issue) => issue.code === 'DIFF_ELEMENT_DROPPED'));
 
     await rm(dir, { recursive: true, force: true });
   });
